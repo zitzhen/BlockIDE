@@ -16963,6 +16963,7 @@ suite('CopilotAgent', () => {
 		const connection: IByokLmBridgeConnection = {
 			chat: async () => ({ output: [] }),
 			onDidChangeModels: modelSnapshots.event,
+			onDidDelta: Event.None,
 		};
 		disposables.add(byokBridgeRegistry.register('renderer', connection));
 
@@ -17019,6 +17020,7 @@ suite('CopilotAgent', () => {
 		disposables.add(byokBridgeRegistry.register('renderer', {
 			chat: async () => ({ output: [] }),
 			onDidChangeModels: modelSnapshots.event,
+			onDidDelta: Event.None,
 		}));
 
 		afterTest(() => disposeAgent(agent));
@@ -17047,6 +17049,7 @@ suite('CopilotAgent', () => {
 		const connection: IByokLmBridgeConnection = {
 			chat: async () => ({ output: [] }),
 			onDidChangeModels: modelSnapshots.event,
+			onDidDelta: Event.None,
 		};
 		disposables.add(byokBridgeRegistry.register('renderer', connection));
 		const copilotRequired = () => agent.getProtectedResources()
@@ -17153,6 +17156,7 @@ suite('CopilotAgent', () => {
 		const connection: IByokLmBridgeConnection = {
 			chat: async () => ({ output: [] }),
 			onDidChangeModels: modelSnapshots.event,
+			onDidDelta: Event.None,
 		};
 		disposables.add(byokBridgeRegistry.register('renderer', connection));
 
@@ -17186,6 +17190,7 @@ suite('CopilotAgent', () => {
 		disposables.add(byokBridgeRegistry.register('renderer', {
 			chat: async () => ({ output: [] }),
 			onDidChangeModels: modelSnapshots.event,
+			onDidDelta: Event.None,
 		}));
 		const sessionId = 'byok-early-restore';
 		const session = AgentSession.uri('copilotcli', sessionId);
