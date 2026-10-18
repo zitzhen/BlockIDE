@@ -154,12 +154,13 @@ export function setup(context: TestContext) {
 			'--disable-experiments',
 			'--extensions-dir', context.createTempDir(),
 			'--user-data-dir', test.userDataDir,
-			'--folder-uri', `vscode-remote://wsl+${wslDistro}${wslWorkspaceDir}`,
 		];
 		const crashDumpsDir = context.getCrashDumpsDir();
 		if (crashDumpsDir) {
 			args.push('--crash-reporter-directory', crashDumpsDir);
 		}
+		// Must be last: on Windows, Electron exits with -1 when any argument follows a URL (CVE-2018-1000006 mitigation).
+		args.push('--folder-uri', `vscode-remote://wsl+${wslDistro}${wslWorkspaceDir}`);
 
 		context.log(`Starting VS Code ${entryPoint} with args ${args.join(' ')}`);
 		const app = await _electron.launch({ executablePath: entryPoint, args });
