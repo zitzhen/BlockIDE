@@ -36,6 +36,7 @@ export const dirs = [
 	'extensions/json-language-features/server',
 	'extensions/markdown-language-features',
 	'extensions/markdown-math',
+	'extensions/minecraft-workbench',
 	'extensions/merge-conflict',
 	'extensions/mermaid-markdown-features',
 	'extensions/microsoft-authentication',
