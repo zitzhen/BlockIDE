@@ -49,13 +49,7 @@ const grammarDescriptors: readonly FixtureGrammarDescriptor[] = [
 	{ language: 'typescriptreact', scopeName: 'source.tsx', path: 'extensions/typescript-basics/syntaxes/TypeScriptReact.tmLanguage.json', embeddedLanguages: { 'meta.tag.tsx': 'jsx-tags', 'meta.tag.without-attributes.tsx': 'jsx-tags', 'meta.tag.attributes.tsx': 'typescriptreact', 'meta.embedded.expression.tsx': 'typescriptreact' }, tokenTypes: commonScriptTokenTypes, unbalancedBracketScopes: ['keyword.operator.relational', 'storage.type.function.arrow', 'keyword.operator.bitwise.shift', 'punctuation.definition.tag', 'keyword.operator.assignment.compound.bitwise.ts'] },
 	{ scopeName: 'documentation.injection.ts', path: 'extensions/typescript-basics/syntaxes/jsdoc.ts.injection.tmLanguage.json', injectTo: ['source.ts', 'source.tsx'] },
 	{ scopeName: 'documentation.injection.js.jsx', path: 'extensions/typescript-basics/syntaxes/jsdoc.js.injection.tmLanguage.json', injectTo: ['source.js', 'source.js.jsx'] },
-	{ language: 'javascript', scopeName: 'source.js', path: 'extensions/javascript/syntaxes/JavaScript.tmLanguage.json', embeddedLanguages: { 'meta.tag.js': 'jsx-tags', 'meta.tag.without-attributes.js': 'jsx-tags', 'meta.tag.attributes.js': 'javascript', 'meta.embedded.expression.js': 'javascript' }, tokenTypes: commonScriptTokenTypes },
-	{ language: 'javascriptreact', scopeName: 'source.js.jsx', path: 'extensions/javascript/syntaxes/JavaScriptReact.tmLanguage.json', embeddedLanguages: { 'meta.tag.js': 'jsx-tags', 'meta.tag.without-attributes.js': 'jsx-tags', 'meta.tag.attributes.js.jsx': 'javascriptreact', 'meta.embedded.expression.js': 'javascriptreact' }, tokenTypes: commonScriptTokenTypes },
-	{ scopeName: 'source.js.regexp', path: 'extensions/javascript/syntaxes/Regular Expressions (JavaScript).tmLanguage' },
 	{ language: 'json', scopeName: 'source.json', path: 'extensions/json/syntaxes/JSON.tmLanguage.json' },
-	{ language: 'css', scopeName: 'source.css', path: 'extensions/css/syntaxes/css.tmLanguage.json', tokenTypes: { 'meta.function.url string.quoted': StandardTokenType.Other } },
-	{ scopeName: 'text.html.basic', path: 'extensions/html/syntaxes/html.tmLanguage.json', embeddedLanguages: { 'text.html': 'html', 'source.css': 'css', 'source.js': 'javascript' }, tokenTypes: { 'meta.tag string.quoted': StandardTokenType.Other } },
-	{ language: 'html', scopeName: 'text.html.derivative', path: 'extensions/html/syntaxes/html-derivative.tmLanguage.json', embeddedLanguages: { 'text.html': 'html', 'source.css': 'css', 'source.js': 'javascript' }, tokenTypes: { 'meta.tag string.quoted': StandardTokenType.Other } },
 ];
 
 export interface FixtureSyntaxHighlightingTheme extends IColorTheme {

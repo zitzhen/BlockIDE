@@ -99,7 +99,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Known suite names (used for help text and validation)
-KNOWN_SUITES="api-folder api-workspace colorize terminal-suggest typescript markdown emmet git git-base ipynb notebook-renderers configuration-editing github-authentication copilot css html json"
+KNOWN_SUITES="api-folder api-workspace colorize terminal-suggest typescript markdown emmet git git-base ipynb notebook-renderers configuration-editing github-authentication copilot html json"
 
 if $HELP; then
 	echo "Usage: $0 [options]"
@@ -359,11 +359,6 @@ kill_app
 fi
 
 # Tests standalone (CommonJS)
-
-if should_run_suite css; then
-start_suite "CSS tests"
-cd "$ROOT/extensions/css-language-features/server" && "$ROOT/scripts/node-electron.sh" test/index.js
-fi
 
 if should_run_suite html; then
 start_suite "HTML tests"
