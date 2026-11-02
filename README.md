@@ -9,16 +9,24 @@ This repository holds the source of BlockIDE and is maintained by ZIT Studio. It
 ## What BlockIDE changes
 
 * **Product identity** — the application is named BlockIDE (`blockide`), with its own data folder, URL protocol, application icons and About dialog.
-* **Built-in Minecraft Workbench** — the [Minecraft Workbench](https://github.com/lopleec/VSCode-minecraft-workbench) extension by Lopleec is vendored under [extensions/minecraft-workbench](extensions/minecraft-workbench) and maintained in this tree, so it does not have to be installed from a VSIX. It activates on startup, which means the **Minecraft** view is already there when the IDE opens.
+* **Built-in Minecraft Workbench** — the Minecraft Workbench extension by Lopleec is bundled as a git submodule at [extensions/minecraft-workbench](extensions/minecraft-workbench), tracked from [zitzhen/VSCode-minecraft-workbench](https://github.com/zitzhen/VSCode-minecraft-workbench), so it does not have to be installed from a VSIX. It activates on startup, which means the **Minecraft** view is already there when the IDE opens.
 * **Default Minecraft sign-in** — a Microsoft public-client application ID is preconfigured for device code sign-in, so signing in with a Microsoft account works out of the box. Set `minecraftWorkbench.microsoftClientId` in Settings to switch to your own application ID.
 
 ## Bundled Extensions
 
 BlockIDE includes a set of built-in extensions located in the [extensions](extensions) folder, including grammars and snippets for many languages. Extensions that provide rich language support (inline suggestions, Go to Definition) for a language have the suffix `language-features`. For example, the `json` extension provides coloring for `JSON` and the `json-language-features` extension provides rich language support for `JSON`.
 
-The [minecraft-workbench](extensions/minecraft-workbench) extension is bundled as well. Its upstream project, release history and issue tracker remain at [lopleec/VSCode-minecraft-workbench](https://github.com/lopleec/VSCode-minecraft-workbench).
+The [minecraft-workbench](extensions/minecraft-workbench) extension is bundled as well, as a git submodule of [zitzhen/VSCode-minecraft-workbench](https://github.com/zitzhen/VSCode-minecraft-workbench). Its original upstream project, release history and issue tracker remain at [lopleec/VSCode-minecraft-workbench](https://github.com/lopleec/VSCode-minecraft-workbench).
 
 ## Development
+
+Clone with submodules, or initialize them in an existing checkout — the build fails without the extension sources:
+
+```sh
+git clone --recurse-submodules https://github.com/zitzhen/BlockIDE.git
+# or, in an existing checkout
+git submodule update --init
+```
 
 The build setup is inherited from `Code - OSS`, so the upstream documentation still applies:
 

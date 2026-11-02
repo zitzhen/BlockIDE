@@ -8,7 +8,7 @@ BlockIDE is a fork of [Code - OSS](https://github.com/microsoft/vscode) that bun
 
 * **BlockIDE-specific changes** — product identity, application icons, bundled extensions, build configuration and Minecraft features belong in this repository: [zitzhen/BlockIDE](https://github.com/zitzhen/BlockIDE).
 * **Upstream VS Code behaviour** — if a problem reproduces in [VS Code](https://github.com/microsoft/vscode) itself, report or fix it upstream. Keeping inherited code close to upstream makes later syncs easier.
-* **The Minecraft Workbench extension** — this repository vendors [lopleec/VSCode-minecraft-workbench](https://github.com/lopleec/VSCode-minecraft-workbench) as a built-in extension. Report upstream unless the change is specific to the bundled build.
+* **The Minecraft Workbench extension** — this repository includes [zitzhen/VSCode-minecraft-workbench](https://github.com/zitzhen/VSCode-minecraft-workbench) as a git submodule, bundled as a built-in extension. File extension fixes in that repository; report behaviour inherited from the original project at [lopleec/VSCode-minecraft-workbench](https://github.com/lopleec/VSCode-minecraft-workbench).
 
 ## Asking Questions
 
@@ -51,6 +51,16 @@ Once submitted, the maintainers will triage your report and may ask for more inf
 
 ## Contributing Code
 
+### Get the sources
+
+The bundled extension is a git submodule, so initialize it before building:
+
+```sh
+git clone --recurse-submodules https://github.com/zitzhen/BlockIDE.git
+# or, in an existing checkout
+git submodule update --init
+```
+
 ### Build from source
 
 The build setup is inherited from `Code - OSS`:
@@ -65,7 +75,7 @@ Alternatively open the repository in VS Code and press `F5`. For incremental dev
 
 ### Build the bundled extension
 
-The Minecraft Workbench sources live in [extensions/minecraft-workbench](extensions/minecraft-workbench) and are built by [.esbuild.mts](extensions/minecraft-workbench/.esbuild.mts), the entry point the repository build system picks up:
+The Minecraft Workbench sources are the submodule at [extensions/minecraft-workbench](extensions/minecraft-workbench), tracked from [zitzhen/VSCode-minecraft-workbench](https://github.com/zitzhen/VSCode-minecraft-workbench). They are built by [.esbuild.mts](extensions/minecraft-workbench/.esbuild.mts), the entry point the repository build system picks up:
 
 ```sh
 cd extensions/minecraft-workbench
@@ -74,6 +84,8 @@ npm run compile
 ```
 
 `npm run compile` runs a type check before bundling. Do not commit `node_modules` or `dist`; both are ignored.
+
+Changes to the extension itself belong in that repository: commit them there, then bump the submodule pointer in this repository. A single pull request can therefore contain both the submodule update and the changes depending on it.
 
 ### Commit conventions
 
