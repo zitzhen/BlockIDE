@@ -1,98 +1,92 @@
-# Contributing to VS Code
+# Contributing to BlockIDE
 
-Welcome, and thank you for your interest in contributing to VS Code!
+Welcome, and thank you for your interest in contributing to BlockIDE!
 
-There are several ways in which you can contribute, beyond writing code. The goal of this document is to provide a high-level overview of how you can get involved.
+BlockIDE is a fork of [Code - OSS](https://github.com/microsoft/vscode) that bundles Minecraft tooling. There are several ways in which you can contribute, beyond writing code. The goal of this document is to provide a high-level overview of how you can get involved.
+
+## Scope: where to contribute
+
+* **BlockIDE-specific changes** — product identity, application icons, bundled extensions, build configuration and Minecraft features belong in this repository: [zitzhen/BlockIDE](https://github.com/zitzhen/BlockIDE).
+* **Upstream VS Code behaviour** — if a problem reproduces in [VS Code](https://github.com/microsoft/vscode) itself, report or fix it upstream. Keeping inherited code close to upstream makes later syncs easier.
+* **The Minecraft Workbench extension** — this repository vendors [lopleec/VSCode-minecraft-workbench](https://github.com/lopleec/VSCode-minecraft-workbench) as a built-in extension. Report upstream unless the change is specific to the bundled build.
 
 ## Asking Questions
 
+Have a question about BlockIDE? Please open an issue in this repository instead of asking on unrelated channels.
 
-Have a question? Instead of opening an issue, please ask on [Stack Overflow](https://stackoverflow.com/questions/tagged/visual-studio-code) using the tag `visual-studio-code`.
-
-The active community will be eager to assist you. Your well-worded question will serve as a resource to others searching for help.
-
-## Providing Feedback
-
-Your comments and feedback are welcome, and the development team is available via a handful of different channels.
-
-See the [Feedback Channels](https://github.com/microsoft/vscode/wiki/Feedback-Channels) wiki page for details on how to share your thoughts.
+For questions about the inherited VS Code core, the [Stack Overflow](https://stackoverflow.com/questions/tagged/visual-studio-code) tag `visual-studio-code` still applies.
 
 ## Reporting Issues
 
-Have you identified a reproducible problem in VS Code? Do you have a feature request? We want to hear about it! Here's how you can report your issue as effectively as possible.
+### Look for an existing issue
 
-### Identify Where to Report
+Before you create a new issue, search the [open issues](https://github.com/zitzhen/BlockIDE/issues) to see whether the problem or feature request has already been filed.
 
-The VS Code project is distributed across multiple repositories. Try to file the issue against the correct repository. Check the list of [Related Projects](https://github.com/microsoft/vscode/wiki/Related-Projects) if you aren't sure which repo is correct.
-
-Can you recreate the issue even after [disabling all extensions](https://code.visualstudio.com/docs/editor/extension-gallery#_disable-an-extension)? If you find the issue is caused by an extension you have installed, please file an issue on the extension's repo directly.
-
-### Look For an Existing Issue
-
-Before you create a new issue, please do a search in [open issues](https://github.com/microsoft/vscode/issues) to see if the issue or feature request has already been filed.
-
-Be sure to scan through the [most popular](https://github.com/microsoft/vscode/issues?q=is%3Aopen+is%3Aissue+label%3Afeature-request+sort%3Areactions-%2B1-desc) feature requests.
-
-If you find your issue already exists, make relevant comments and add your [reaction](https://github.com/blog/2119-add-reactions-to-pull-requests-issues-and-comments). Use a reaction in place of a "+1" comment:
+If you find your issue already exists, add relevant comments and a [reaction](https://github.com/blog/2119-add-reactions-to-pull-requests-issues-and-comments) instead of a "+1" comment:
 
 * 👍 - upvote
 * 👎 - downvote
 
-If you cannot find an existing issue that describes your bug or feature, create a new issue using the guidelines below.
+### Writing good bug reports and feature requests
 
-### Writing Good Bug Reports and Feature Requests
-
-File a single issue per problem and feature request. Do not enumerate multiple bugs or feature requests in the same issue.
-
-Do not add your issue as a comment to an existing issue unless it's for the identical issue. Many issues look similar but have different causes.
-
-The more information you can provide, the more likely someone will be successful at reproducing the issue and finding a fix.
-
-The built-in tool for reporting an issue, which you can access by using `Report Issue` in VS Code's Help menu, can help streamline this process by automatically providing the version of VS Code, all your installed extensions, and your system info. Additionally, the tool will search among existing issues to see if a similar issue already exists.
+File a single issue per problem or feature request. Do not enumerate multiple bugs in the same issue, and do not add your issue as a comment to an unrelated existing one.
 
 Please include the following with each issue:
 
-* Version of VS Code
+* Version of BlockIDE
 * Your operating system
 * List of extensions that you have installed
 * Reproducible steps (1... 2... 3...) that cause the issue
 * What you expected to see, versus what you actually saw
 * Images, animations, or a link to a video showing the issue occurring
-* A code snippet that demonstrates the issue or a link to a code repository the developers can easily pull down to recreate the issue locally
-  * **Note:** Because the developers need to copy and paste the code snippet, including a code snippet as a media file (i.e. .gif) is not sufficient.
+* A code snippet that demonstrates the issue, or a link to a repository the developers can pull down
+  * **Note:** Because the developers need to copy and paste the code snippet, including it only as a media file (i.e. .gif) is not sufficient.
 * Errors from the Dev Tools Console (open from the menu: Help > Toggle Developer Tools)
 
-### Creating Pull Requests
+For Minecraft Workbench behaviour, include the extension log from the **Output** panel (`Minecraft Workbench`) as well.
 
-* Please refer to the article on [creating pull requests](https://github.com/microsoft/vscode/wiki/How-to-Contribute#pull-requests) and contributing to this project.
+### Follow your issue
 
-### Final Checklist
+Once submitted, the maintainers will triage your report and may ask for more information. Please respond rather than closing the issue, so the report stays actionable.
 
-Please remember to do the following:
+## Contributing Code
 
-* [ ] Search the issue repository to ensure your report is a new issue
-* [ ] Recreate the issue after disabling all extensions
-* [ ] Simplify your code around the issue to better isolate the problem
+### Build from source
 
-Don't feel bad if the developers can't reproduce the issue right away. They will simply ask for more information!
+The build setup is inherited from `Code - OSS`:
 
-### Follow Your Issue
+```sh
+npm install
+npm run compile
+./scripts/code.sh
+```
 
-Once submitted, your report will go into the [issue tracking](https://github.com/microsoft/vscode/wiki/Issue-Tracking) workflow. Be sure to understand what will happen next, so you know what to expect and how to continue to assist throughout the process.
+Alternatively open the repository in VS Code and press `F5`. For incremental development use `npm run watch`.
 
-## Automated Issue Management
+### Build the bundled extension
 
-We use GitHub Actions to help us manage issues. These Actions and their descriptions can be [viewed here](https://github.com/microsoft/vscode-github-triage-actions). Some examples of what these Actions do are:
+The Minecraft Workbench sources live in [extensions/minecraft-workbench](extensions/minecraft-workbench) and are built by [.esbuild.mts](extensions/minecraft-workbench/.esbuild.mts), the entry point the repository build system picks up:
 
-* Automatically close any issue marked `info-needed` if there has been no response in the past 7 days.
-* Automatically lock issues 45 days after they are closed.
-* Automatically implement the VS Code [feature request pipeline](https://github.com/microsoft/vscode/wiki/Issues-Triaging#managing-feature-requests).
+```sh
+cd extensions/minecraft-workbench
+npm ci
+npm run compile
+```
 
-If you believe the bot got something wrong, please open a new issue and let us know.
+`npm run compile` runs a type check before bundling. Do not commit `node_modules` or `dist`; both are ignored.
 
-## Contributing Fixes
+### Commit conventions
 
-If you are interested in writing code to fix issues, please see [How to Contribute](https://github.com/microsoft/vscode/wiki/How-to-Contribute) in the wiki.
+* One commit per logical change — avoid large commits that mix unrelated edits.
+* Describe *why* the change is needed, not only what changed.
+* Build and type check before you commit.
+
+### Creating pull requests
+
+* Link the issue your pull request addresses.
+* Explain what changed and why, and list the steps you used to verify it.
+* Keep changes focused on inherited upstream files where possible, so that syncing with `Code - OSS` stays simple.
+* Refer to the upstream article on [creating pull requests](https://github.com/microsoft/vscode/wiki/How-to-Contribute#pull-requests) and the [coding guidelines](https://github.com/microsoft/vscode/wiki/Coding-Guidelines).
 
 ## Thank You
 
