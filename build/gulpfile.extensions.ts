@@ -43,8 +43,6 @@ const extensionCompilation = new BuildLifecycle(
 // });
 const compilations = [
 	'extensions/configuration-editing/tsconfig.json',
-	'extensions/css-language-features/client/tsconfig.json',
-	'extensions/css-language-features/server/tsconfig.json',
 	'extensions/debug-auto-launch/tsconfig.json',
 	'extensions/debug-server-ready/tsconfig.json',
 	'extensions/emmet/tsconfig.json',
@@ -68,8 +66,6 @@ const compilations = [
 	'extensions/terminal-suggest/tsconfig.json',
 	'extensions/microsoft-authentication/tsconfig.json',
 	'extensions/notebook-renderers/tsconfig.json',
-	'extensions/npm/tsconfig.json',
-	'extensions/php-language-features/tsconfig.json',
 	'extensions/references-view/tsconfig.json',
 	'extensions/search-result/tsconfig.json',
 	'extensions/simple-browser/tsconfig.json',
