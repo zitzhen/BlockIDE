@@ -288,8 +288,27 @@ export function hygiene(some: NodeJS.ReadWriteStream | string[] | undefined, run
 	);
 }
 
+function getSubmodulePrefixes(repositoryPath: string): string[] {
+	try {
+		const contents = fs.readFileSync(path.join(repositoryPath, '.gitmodules'), 'utf8');
+		return Array.from(contents.matchAll(/^[ \t]*path[ \t]*=[ \t]*(.+)$/gm), (match) =>
+			path.normalize(path.join(repositoryPath, match[1].trim())) + path.sep
+		);
+	} catch {
+		return [];
+	}
+}
+
 function createGitIndexVinyls(paths: string[]): Promise<VinylFile[]> {
 	const repositoryPath = process.cwd();
+	const submodulePrefixes = getSubmodulePrefixes(repositoryPath);
+
+	// Files inside a submodule are tracked by that submodule's repository,
+	// the parent index only records a gitlink for the directory itself.
+	paths = paths.filter((relativePath) => {
+		const fullPath = path.normalize(path.join(repositoryPath, relativePath));
+		return !submodulePrefixes.some((prefix) => fullPath.startsWith(prefix));
+	});
 
 	const fns = paths.map((relativePath) => () =>
 		new Promise<VinylFile | null>((c, e) => {
@@ -301,6 +320,9 @@ function createGitIndexVinyls(paths: string[]): Promise<VinylFile[]> {
 					return c(null);
 				} else if (err) {
 					return e(err);
+				} else if (stat.isDirectory()) {
+					// ignore directories, e.g. submodules recorded as gitlinks in the index
+					return c(null);
 				}
 
 				cp.exec(
