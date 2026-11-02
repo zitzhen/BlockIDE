@@ -1,14 +1,7 @@
-<!-- BEGIN MICROSOFT SECURITY.MD V1.0.0 BLOCK -->
-
 ## Security
 
-Microsoft takes the security of our software products and services seriously, which
-includes all source code repositories in our GitHub organizations.
+ZIT Studio places great importance on the security of its software products and services, which encompasses all source code repositories under our GitHub organization.
 
-**Please do not report security vulnerabilities through public GitHub issues.**
+**Please do not report security vulnerabilities via public GitHub Issues.**
 
-For security reporting information, locations, contact information, and policies,
-please review the latest guidance for Microsoft repositories at
-[https://aka.ms/SECURITY.md](https://aka.ms/SECURITY.md).
-
-<!-- END MICROSOFT SECURITY.MD BLOCK -->
+For information regarding how to report security vulnerabilities, available channels, contact details, and relevant policies, please refer to the ZIT Studio Security Policy: [https://github.com/zitzhen/.github/blob/main/Security.md](https://github.com/zitzhen/.github/blob/main/Security.md)
