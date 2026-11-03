@@ -73,13 +73,11 @@ jobs:
       UNIT_TESTS: 'true'
       TEST_SELECTION: 'true'
     steps: &steps
-      # The larger runners keep the workspace on the OS disk, where creating many small files, such as
-      # extracting node_modules, takes twice as long as on the 1ES runners' temporary disk. A Dev Drive in
-      # a VHDX on the same disk is faster than both. It is mounted at the parent of the workspace, so that
-      # the workspace keeps its path and is an ordinary, empty folder for actions/checkout, which cannot
-      # clear the root of a volume. The smoke test shard with the WSL suite runs on the 1ES pool (see the
-      # runs-on of electron-smoke-1), and WSL cannot open folders on a volume that is mounted in a folder of
-      # drive C: anyway.
+      # Creating many small files, such as extracting node_modules, is slow on the hosted runners' OS
+      # disk. A Dev Drive in a VHDX on the same disk is faster. It is mounted at the parent of the
+      # workspace, so that the workspace keeps its path and is an ordinary, empty folder for
+      # actions/checkout, which cannot clear the root of a volume. The shard that provisions WSL skips
+      # this step, because WSL cannot open folders on a volume that is mounted in a folder of drive C:.
       - name: Move the workspace to a Dev Drive
         if: ${{ !(env.ELECTRON_TESTS == 'true' && env.SMOKE_TESTS == 'true' && env.SMOKE_SHARD_INDEX == '1') }}
         shell: pwsh
@@ -117,6 +115,7 @@ jobs:
       - name: Checkout microsoft/vscode
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          submodules: recursive
           lfs: true
 
       # The WSL steps only run in shard 1, which is where test/smoke/src/shard.ts pins the WSL suite.
