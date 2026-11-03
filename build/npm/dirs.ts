@@ -56,6 +56,7 @@ export const workspaceMembers = [
 	'.vscode/extensions/vscode-selfhost-test-provider',
 	'.vscode/extensions/vscode-extras',
 	'.vscode/extensions/vscode-pr-pinger',
+	'src/vs/sessions/test/e2e',
 ];
 
 /**
@@ -84,7 +85,6 @@ export const standaloneRoots = [
 	'build/npm/gyp',
 	'extensions/copilot/chat-lib',
 	'extensions/markdown-language-features/test-workspace/checkbox-count-extension',
-	'src/vs/sessions/test/e2e',
 	'test/componentFixtures/playwright',
 	'test/sanity',
 ];
