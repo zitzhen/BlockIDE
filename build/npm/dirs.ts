@@ -31,6 +31,7 @@ export const workspaceMembers = [
 	'extensions/json-language-features',
 	'extensions/json-language-features/server',
 	'extensions/markdown-language-features',
+	'extensions/markdown-language-features/test-workspace/checkbox-count-extension',
 	'extensions/markdown-math',
 	'extensions/minecraft-workbench',
 	'extensions/merge-conflict',
@@ -85,7 +86,6 @@ export const separateRoots = [
 export const standaloneRoots = [
 	'build/npm/gyp',
 	'extensions/copilot/chat-lib',
-	'extensions/markdown-language-features/test-workspace/checkbox-count-extension',
 	'test/sanity',
 ];
 
