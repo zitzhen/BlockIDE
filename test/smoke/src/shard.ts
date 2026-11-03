@@ -32,6 +32,28 @@ const suiteDurations = new Map<string, number>([
 	['Task', 35],
 	['Accessibility', 35],
 ]);
+
+/**
+ * The durations that differ on the Windows runners of the pull request workflows, where several suites
+ * take much less time than on Linux and macOS.
+ */
+const win32SuiteDurations = new Map<string, number>([
+	// Windows only. Also counts the ~110s WSL setup step before the first shard and the ~50s WSL Kerberos
+	// proxy run after it, which only the first shard runs (see pr-win32-test.yml).
+	['Agents Window (WSL Dev Container AgentHost)', 250],
+	['Terminal', 140],
+	['Data Loss (insiders -> insiders)', 125],
+	['Chat Sessions', 75],
+	['Agents Window (Codex)', 45],
+	['Integrated Browser', 45],
+	['Agents Window (local AgentHost)', 35],
+	['Extension Host Restart', 30],
+	['Chat Model Configuration', 30],
+	['Task', 25],
+	['Accessibility', 20],
+	['Agents Window (local AgentHost, SDK sandbox)', 15],
+]);
+const platformSuiteDurations = process.platform === 'win32' ? new Map([...suiteDurations, ...win32SuiteDurations]) : suiteDurations;
 const defaultSuiteDuration = 20;
 
 // Coupled to the PR workflows: pr-darwin-test.yml runs the PAC proxy suites
@@ -57,7 +79,7 @@ function hasRunnableTests(suite: Suite): boolean {
 }
 
 function estimateDuration(suite: Suite): number {
-	return hasRunnableTests(suite) ? suiteDurations.get(suite.title) ?? defaultSuiteDuration : 0;
+	return hasRunnableTests(suite) ? platformSuiteDurations.get(suite.title) ?? defaultSuiteDuration : 0;
 }
 
 /**
