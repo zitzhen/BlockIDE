@@ -16,7 +16,7 @@ import { FocusMode } from '../../../../platform/native/common/native.js';
 import { IWorkbenchContribution } from '../../../../workbench/common/contributions.js';
 import { IChatWidgetService } from '../../../../workbench/contrib/chat/browser/chat.js';
 import { IChatService } from '../../../../workbench/contrib/chat/common/chatService/chatService.js';
-import { ChatNotificationKind, getChatNotificationDedupeKey, getChatNotificationResource } from '../../../../workbench/contrib/chat/common/chatNotification.js';
+import { ChatNotificationKind, getChatNotificationDedupeKey } from '../../../../workbench/contrib/chat/common/chatNotification.js';
 import { ChatConfiguration, ChatNotificationMode } from '../../../../workbench/contrib/chat/common/constants.js';
 import { IHostService } from '../../../../workbench/services/host/browser/host.js';
 import { ISessionsService } from '../../../services/sessions/browser/sessionsService.js';
@@ -29,7 +29,7 @@ export class SessionsWindowNotifier extends Disposable implements IWorkbenchCont
 	static readonly ID = 'workbench.contrib.sessionsWindowNotifier';
 
 	private readonly _statusListeners = this._register(new DisposableMap<string>());
-	private readonly _comparisonStatusListeners = this._register(new DisposableMap<IChat>());
+	private readonly _chatStatusListeners = this._register(new DisposableMap<ISession, DisposableMap<IChat>>());
 	private readonly _activeNotifications = this._register(new DisposableResourceMap());
 
 	constructor(
@@ -59,29 +59,38 @@ export class SessionsWindowNotifier extends Disposable implements IWorkbenchCont
 		const sessionsChanged = observableSignalFromEvent(this, this._sessionsManagementService.onDidChangeSessions);
 		this._register(autorun(reader => {
 			sessionsChanged.read(reader);
-			const tracked = new Set<IChat>();
+			const tracked = new Set<ISession>();
 			for (const comparison of this._sessionComparisonService.comparisons.read(reader)) {
-				if (comparison.archivedAt !== undefined) {
-					continue;
-				}
 				for (const participant of comparison.participants) {
 					if (!participant.sessionResource || !participant.chatResource) {
 						continue;
 					}
 					const session = this._sessionsManagementService.getSession(participant.sessionResource);
-					if (session) {
-						for (const chat of session.chats.read(reader)) {
-							tracked.add(chat);
-							if (!this._comparisonStatusListeners.has(chat)) {
-								this._comparisonStatusListeners.set(chat, this._createStatusListener(session, chat));
-							}
+					if (!session || tracked.has(session)) {
+						continue;
+					}
+					tracked.add(session);
+					let listeners = this._chatStatusListeners.get(session);
+					if (!listeners) {
+						this._chatStatusListeners.set(session, listeners = new DisposableMap<IChat>());
+					}
+					// Replacing aggregate notifications must cover ordinary peers as well as comparison participants.
+					const chats = new Set(session.chats.read(reader));
+					for (const chat of chats) {
+						if (!listeners.has(chat)) {
+							listeners.set(chat, this._createStatusListener(session, chat));
+						}
+					}
+					for (const chat of listeners.keys()) {
+						if (!chats.has(chat)) {
+							listeners.deleteAndDispose(chat);
 						}
 					}
 				}
 			}
-			for (const chat of this._comparisonStatusListeners.keys()) {
-				if (!tracked.has(chat)) {
-					this._comparisonStatusListeners.deleteAndDispose(chat);
+			for (const session of this._chatStatusListeners.keys()) {
+				if (!tracked.has(session)) {
+					this._chatStatusListeners.deleteAndDispose(session);
 				}
 			}
 		}));
@@ -109,11 +118,6 @@ export class SessionsWindowNotifier extends Disposable implements IWorkbenchCont
 		this._statusListeners.set(session.sessionId, this._createStatusListener(session));
 	}
 
-	private _tracksChats(session: ISession): boolean {
-		return this._sessionComparisonService.comparisons.get().some(comparison => comparison.archivedAt === undefined
-			&& comparison.participants.some(participant => participant.chatResource && isEqual(participant.sessionResource, session.resource)));
-	}
-
 	private _createStatusListener(session: ISession, chat?: IChat): DisposableStore {
 		const store = new DisposableStore();
 		const resource = chat?.resource ?? session.resource;
@@ -121,7 +125,7 @@ export class SessionsWindowNotifier extends Disposable implements IWorkbenchCont
 		const completedNotificationScheduler = store.add(new RunOnceScheduler(() => void this._notify(session, SessionStatus.Completed, chat), this._getCompletedNotificationDelay()));
 		store.add(autorunDelta((chat ?? session).status, ({ lastValue, newValue }) => {
 			if (lastValue === undefined || lastValue === newValue
-				|| (!chat && this._tracksChats(session))) {
+				|| (!chat && this._hasChatStatusListeners(session))) {
 				return;
 			}
 
@@ -139,7 +143,7 @@ export class SessionsWindowNotifier extends Disposable implements IWorkbenchCont
 	}
 
 	private async _notify(session: ISession, status: SessionStatus, chat?: IChat): Promise<void> {
-		if ((chat ?? session).status.get() !== status || (!chat && this._tracksChats(session))) {
+		if ((chat ?? session).status.get() !== status || (!chat && this._hasChatStatusListeners(session))) {
 			return;
 		}
 		const resource = chat?.resource ?? session.resource;
@@ -165,7 +169,7 @@ export class SessionsWindowNotifier extends Disposable implements IWorkbenchCont
 			await timeout(this._getBackgroundNotificationDelay());
 			const notifyForInactivePane = this._shouldNotifyForInactivePane(session, status, mode, chat);
 			if (cts.token.isCancellationRequested || (chat ?? session).status.get() !== status
-				|| !chat && this._tracksChats(session)
+				|| !chat && this._hasChatStatusListeners(session)
 				|| this._isCoveredByChatNotifier(resource, status) && !notifyForInactivePane
 				|| mode !== ChatNotificationMode.Always && this._hostService.hasFocus && !notifyForInactivePane) {
 				return;
@@ -199,15 +203,21 @@ export class SessionsWindowNotifier extends Disposable implements IWorkbenchCont
 		}
 	}
 
-	private _isCoveredByChatNotifier(resource: URI, status: SessionStatus): boolean {
-		const models = [
-			this._chatService.getSession(resource),
-			...[...this._chatService.chatModels.get()].filter(model => isEqual(getChatNotificationResource(model), resource)),
-		];
-		if (status === SessionStatus.NeedsInput) {
-			return models.some(model => !!model?.requestNeedsInput.get());
+	private _hasChatStatusListeners(session: ISession): boolean {
+		const listeners = this._chatStatusListeners.get(session);
+		if (!listeners) {
+			return false;
 		}
-		return models.some(model => !!model) || !!this._chatWidgetService.getWidgetBySessionResource(resource);
+		const chats = session.chats.get();
+		return chats.length > 0 && chats.every(chat => listeners.has(chat));
+	}
+
+	private _isCoveredByChatNotifier(resource: URI, status: SessionStatus): boolean {
+		const model = this._chatService.getSession(resource);
+		if (status === SessionStatus.NeedsInput) {
+			return !!model?.requestNeedsInput.get();
+		}
+		return !!model || !!this._chatWidgetService.getWidgetBySessionResource(resource);
 	}
 
 	private _shouldNotifyForInactivePane(session: ISession, status: SessionStatus, mode: ChatNotificationMode, chat?: IChat): boolean {
@@ -216,15 +226,15 @@ export class SessionsWindowNotifier extends Disposable implements IWorkbenchCont
 		}
 		const visibleSessions = this._sessionsService.visibleSessionPanes.get();
 		const activeSession = this._sessionsService.activeSession.get();
+		const comparison = this._sessionComparisonService.getComparisonForSession(session.resource);
 		return visibleSessions.length > 1
 			&& visibleSessions.some(candidate => candidate?.sessionId === session.sessionId && (!chat || isEqual(candidate.activeChat.get().resource, chat.resource)))
 			&& (chat ? !isEqual(activeSession?.activeChat.get().resource, chat.resource) : activeSession?.sessionId !== session.sessionId)
+			&& !!comparison
+			&& comparison.archivedAt === undefined
+			&& (!chat || comparison.participants.some(participant => participant.chatResource && isEqual(participant.chatResource, chat.resource)))
 			&& !!activeSession
-			&& this._sessionComparisonService.comparisons.get().some(comparison => comparison.archivedAt === undefined
-				&& comparison.participants.some(participant => isEqual(participant.sessionResource, session.resource)
-					&& (!participant.chatResource || isEqual(participant.chatResource, chat?.resource ?? session.mainChat.get().resource)))
-				&& comparison.participants.some(participant => isEqual(participant.sessionResource, activeSession.resource)
-					&& (!participant.chatResource || isEqual(participant.chatResource, activeSession.activeChat.get().resource))));
+			&& this._sessionComparisonService.getComparisonForSession(activeSession.resource)?.id === comparison.id;
 	}
 
 	private _getNotificationBody(session: ISession | IChat, status: SessionStatus): string {
