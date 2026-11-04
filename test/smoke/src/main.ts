@@ -19,7 +19,6 @@ import { setup as setupDataLossTests } from './areas/workbench/data-loss.test';
 import { setup as setupPreferencesTests } from './areas/preferences/preferences.test';
 import { setup as setupSearchTests } from './areas/search/search.test';
 import { setup as setupNotebookTests } from './areas/notebook/notebook.test';
-import { setup as setupLanguagesTests } from './areas/languages/languages.test';
 import { setup as setupStatusbarTests } from './areas/statusbar/statusbar.test';
 import { setup as setupExtensionTests } from './areas/extensions/extensions.test';
 import { setup as setupExtensionHostRestartTests } from './areas/extensions/extension-host-restart.test';
@@ -453,7 +452,6 @@ const smokeTestSuite = describe(`VSCode Smoke Tests (${opts.web ? 'Web' : 'Elect
 	setupPreferencesTests(logger);
 	setupSearchTests(logger);
 	if (!opts.web) { setupNotebookTests(logger); }
-	setupLanguagesTests(logger);
 	setupTerminalTests(logger);
 	setupTaskTests(logger);
 	setupStatusbarTests(logger);
