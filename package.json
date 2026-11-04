@@ -2,7 +2,7 @@
   "name": "BlockIDE",
   "version": "1.0.3",
   "packageManager": "pnpm@12.16.0",
-  "distro": "05457c417e0e384f4d465f2acab6d21f43360868",
+  "distro": "db5ed1b9eedd37f415858594f54bfd0859e60a6b",
   "author": {
     "name": "Microsoft Corporation",
     "name2": "ZIT Studio"
