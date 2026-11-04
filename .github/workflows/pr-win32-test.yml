@@ -288,7 +288,6 @@ jobs:
           $ErrorActionPreference = "Stop"
           exec { npm run gulp `
             compile-extension:configuration-editing `
-            compile-extension:css-language-features-server `
             compile-extension:emmet `
             compile-extension:git `
             compile-extension:git-base `
