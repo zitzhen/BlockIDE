@@ -234,6 +234,7 @@ jobs:
             compile-extension:vscode-colorize-tests \
             compile-extension:vscode-colorize-perf-tests \
             compile-extension:vscode-test-resolver
+          npm --prefix extensions/minecraft-workbench run compile
 
       - name: 🧪 Run Agent Host E2E tests (Electron)
         id: agent-host-e2e

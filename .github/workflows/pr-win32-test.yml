@@ -306,6 +306,7 @@ jobs:
             compile-extension:vscode-colorize-perf-tests `
             compile-extension:vscode-test-resolver `
           }
+          exec { npm --prefix extensions/minecraft-workbench run compile }
 
       - name: Diagnostics before integration test runs
         if: ${{ (env.INTEGRATION_TESTS == 'true' || env.AGENT_HOST_E2E_TESTS == 'true') && always() }}
