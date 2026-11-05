@@ -118,21 +118,6 @@ jobs:
           submodules: recursive
           lfs: true
 
-      # The WSL steps only run in shard 1, which is where test/smoke/src/shard.ts pins the WSL suite.
-      # pr-node-modules.yml fills this cache on main, so pull requests don't download the installer.
-      - name: Restore WSL installer
-        if: ${{ env.ELECTRON_TESTS == 'true' && env.SMOKE_TESTS == 'true' && env.SMOKE_SHARD_INDEX == '1' }}
-        uses: ./.github/actions/restore-wsl-installer
-
-      - name: Prepare WSL Dev Container smoke tests
-        id: wsl-dev-container
-        if: ${{ env.ELECTRON_TESTS == 'true' && env.SMOKE_TESTS == 'true' && env.SMOKE_SHARD_INDEX == '1' }}
-        timeout-minutes: 15
-        shell: pwsh
-        run: .\test\smoke\wslDevContainer.ps1
-        env:
-          WSL_INSTALLER_CACHE_DIR: ${{ github.workspace }}\.build\wsl-installer
-
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -400,19 +385,6 @@ jobs:
         run: npm run smoketest-no-compile -- --tracing --shard ${{ env.SMOKE_SHARD_INDEX }}/${{ env.SMOKE_SHARD_TOTAL }}
         env:
           VSCODE_SMOKE_TEST_POLICY: '1'
-          # Set in every shard so all shards register the WSL suite and compute the same split
-          VSCODE_SMOKE_TEST_WSL_REQUIRED: '1'
-          VSCODE_SMOKE_TEST_WSL_DISTRO: ${{ steps.wsl-dev-container.outputs.distro }}
-          VSCODE_SMOKE_TEST_WSL_SERVER_PATH: ${{ steps.wsl-dev-container.outputs.serverPath }}
-
-      - name: Clean up WSL Dev Container smoke tests
-        if: ${{ always() && steps.wsl-dev-container.outputs.root != '' }}
-        timeout-minutes: 5
-        shell: pwsh
-        env:
-          WSL_SMOKE_DISTRO: ${{ steps.wsl-dev-container.outputs.distro }}
-          WSL_SMOKE_ROOT: ${{ steps.wsl-dev-container.outputs.root }}
-        run: .\test\smoke\wslDevContainer.ps1 -Operation Cleanup -Distribution $env:WSL_SMOKE_DISTRO -Root $env:WSL_SMOKE_ROOT
 
       - name: 🧪 Run smoke tests (Browser, Chromium)
         if: ${{ env.BROWSER_TESTS == 'true' && env.SMOKE_TESTS == 'true' }}

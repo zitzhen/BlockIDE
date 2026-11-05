@@ -411,13 +411,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.VSCODE_OSS }}
 
-      # The Windows smoke tests install this WSL release, see pr-win32-test.yml
-      - name: Cache WSL installer
-        continue-on-error: true
-        uses: ./.github/actions/restore-wsl-installer
-        with:
-          save-cache: 'true'
-
   copilot-linux:
     name: Copilot (Linux)
     needs: caches
