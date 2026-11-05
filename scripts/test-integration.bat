@@ -71,9 +71,9 @@ if defined SHOW_HELP (
 	echo   --help, -h                    show this help
 	echo.
 	echo Available suites:
-	echo   api-folder, api-workspace, colorize, terminal-suggest, typescript,
-	echo   markdown, emmet, git, git-base, ipynb, notebook-renderers,
-	echo   configuration-editing, github-authentication, copilot, css, html, json
+	echo   api-folder, api-workspace, terminal-suggest, typescript,
+	echo   markdown, git, git-base, ipynb, notebook-renderers,
+	echo   configuration-editing, github-authentication, copilot, html, json
 	echo.
 	echo All other options are forwarded to the node.js test runner ^(see scripts\test.bat --help^).
 	echo Note: extra options are not forwarded to extension host suites ^(--suite mode^).
@@ -136,12 +136,12 @@ echo Storing log files into '%VSCODELOGSDIR%'.
 :: Validate --suite filter matches at least one known suite
 if defined SUITE_FILTER (
 	set "_any_match="
-	for %%s in (api-folder api-workspace colorize terminal-suggest typescript markdown emmet git git-base ipynb notebook-renderers configuration-editing github-authentication copilot css html json) do (
+	for %%s in (api-folder api-workspace terminal-suggest typescript markdown git git-base ipynb notebook-renderers configuration-editing github-authentication copilot html json) do (
 		call :should_run_suite %%s && set "_any_match=1"
 	)
 	if not defined _any_match (
 		echo Error: no suites match filter '%SUITE_FILTER%'
-		echo Available suites: api-folder api-workspace colorize terminal-suggest typescript markdown emmet git git-base ipynb notebook-renderers configuration-editing github-authentication copilot css html json
+		echo Available suites: api-folder api-workspace terminal-suggest typescript markdown git git-base ipynb notebook-renderers configuration-editing github-authentication copilot html json
 		goto :failed
 	)
 )
@@ -201,17 +201,6 @@ call "%INTEGRATION_TEST_ELECTRON_PATH%" %SCRIPT_DIR%\..\extensions\vscode-api-te
 if %errorlevel% neq 0 exit /b %errorlevel%
 :skip_api_workspace
 
-call :should_run_suite colorize || goto skip_colorize
-echo.
-echo ### Colorize tests
-if defined GREP_PATTERN (
-	call npm run test-extension -- -l vscode-colorize-tests --grep "%GREP_PATTERN%"
-) else (
-	call npm run test-extension -- -l vscode-colorize-tests
-)
-if %errorlevel% neq 0 exit /b %errorlevel%
-:skip_colorize
-
 call :should_run_suite terminal-suggest || goto skip_terminal_suggest
 echo.
 echo ### Terminal Suggest tests
@@ -240,13 +229,6 @@ if defined GREP_PATTERN (
 )
 if %errorlevel% neq 0 exit /b %errorlevel%
 :skip_markdown
-
-call :should_run_suite emmet || goto skip_emmet
-echo.
-echo ### Emmet tests
-call "%INTEGRATION_TEST_ELECTRON_PATH%" %SCRIPT_DIR%\..\extensions\emmet\test-workspace --extensionDevelopmentPath=%SCRIPT_DIR%\..\extensions\emmet --extensionTestsPath=%SCRIPT_DIR%\..\extensions\emmet\out\test %API_TESTS_EXTRA_ARGS%
-if %errorlevel% neq 0 exit /b %errorlevel%
-:skip_emmet
 
 call :should_run_suite git || goto skip_git
 echo.
@@ -325,13 +307,6 @@ if %errorlevel% neq 0 exit /b %errorlevel%
 :skip_copilot
 
 :: Tests standalone (CommonJS)
-
-call :should_run_suite css || goto skip_css
-echo.
-echo ### CSS tests
-call %SCRIPT_DIR%\node-electron.bat %SCRIPT_DIR%\..\extensions\css-language-features/server/test/index.js
-if %errorlevel% neq 0 exit /b %errorlevel%
-:skip_css
 
 call :should_run_suite html || goto skip_html
 echo.

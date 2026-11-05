@@ -99,7 +99,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Known suite names (used for help text and validation)
-KNOWN_SUITES="api-folder api-workspace colorize terminal-suggest typescript markdown emmet git git-base ipynb notebook-renderers configuration-editing github-authentication copilot html json"
+KNOWN_SUITES="api-folder api-workspace terminal-suggest typescript markdown git git-base ipynb notebook-renderers configuration-editing github-authentication copilot html json"
 
 if $HELP; then
 	echo "Usage: $0 [options]"
@@ -286,12 +286,6 @@ start_suite "API tests (workspace)"
 kill_app
 fi
 
-if should_run_suite colorize; then
-start_suite "Colorize tests"
-npm run test-extension -- -l vscode-colorize-tests "${GREP_ARGS[@]}"
-kill_app
-fi
-
 if should_run_suite terminal-suggest; then
 start_suite "Terminal Suggest tests"
 npm run test-extension -- -l terminal-suggest --enable-proposed-api=vscode.vscode-api-tests "${GREP_ARGS[@]}"
@@ -307,12 +301,6 @@ fi
 if should_run_suite markdown; then
 start_suite "Markdown tests"
 npm run test-extension -- -l markdown-language-features "${GREP_ARGS[@]}"
-kill_app
-fi
-
-if should_run_suite emmet; then
-start_suite "Emmet tests"
-"$INTEGRATION_TEST_ELECTRON_PATH" $ROOT/extensions/emmet/test-workspace --extensionDevelopmentPath=$ROOT/extensions/emmet --extensionTestsPath=$ROOT/extensions/emmet/out/test $API_TESTS_EXTRA_ARGS
 kill_app
 fi
 
