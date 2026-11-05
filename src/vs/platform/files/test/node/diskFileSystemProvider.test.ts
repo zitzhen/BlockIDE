@@ -68,6 +68,7 @@ suite('DiskFileSystemProvider', function () {
 		);
 	});
 
+<<<<<<< HEAD
 	test('atomic rename is forwarded through the disk provider channel', async () => {
 		const server = store.add(new TestDiskFileSystemProviderChannel(provider, new NullLogService()));
 		const commands: string[] = [];
@@ -133,9 +134,8 @@ suite('DiskFileSystemProvider', function () {
 		});
 	}
 
-	(isLinux ? test : test.skip)('realpath returns the unresolved path of a readable link it cannot resolve, which stat reports as a link', async () => {
+	(isLinux ? test : test.skip)('realpath returns the unresolved path of a readable link it cannot resolve, unless strict', async () => {
 		// A link to the descriptor of an open, deleted file cannot be resolved, but reading it succeeds.
-		// Callers that authorize by resolved path (e.g. webview resource loading) rely on `stat` to detect this.
 		const deletedPath = join(testDir, 'deleted.txt');
 		await promises.writeFile(deletedPath, 'contents');
 		const handle = await promises.open(deletedPath, 'r');
@@ -146,10 +146,12 @@ suite('DiskFileSystemProvider', function () {
 
 			assert.deepStrictEqual({
 				realpath: await provider.realpath(link),
+				strictRealpath: await provider.realpath(link, { strict: true }).catch(error => toFileSystemProviderErrorCode(error)),
 				isSymbolicLink: ((await provider.stat(link)).type & FileType.SymbolicLink) !== 0,
 				contents: Buffer.from(await provider.readFile(link)).toString(),
 			}, {
 				realpath: link.fsPath,
+				strictRealpath: FileSystemProviderErrorCode.FileNotFound,
 				isSymbolicLink: true,
 				contents: 'contents',
 			});
