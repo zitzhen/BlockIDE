@@ -2,8 +2,8 @@ name: CSS Cascade-Order Scan
 
 on:
   schedule:
-    # Once per day at 05:17 UTC (off the hour to avoid scheduler contention).
-    - cron: '17 5 * * *'
+    # Once per week at 05:17 UTC (off the hour to avoid scheduler contention).
+    - cron: '17 5 * * 1'
   workflow_dispatch:
 
 permissions:

@@ -650,29 +650,6 @@ async function waitForPromptRequest(mockServer: MockLlmServer, requestsBefore: n
 	throw new Error(`Timed out waiting for the Copilot model request with ${requestTag}`);
 }
 
-async function assertRemoteDevContainerRouting(logsPath: string, transport: RemoteDevContainerTransport, workspacePath: string, reply: string): Promise<void> {
-	interface IFrame {
-		readonly _ahpLog?: { readonly transport?: string };
-		readonly method?: string;
-		readonly params?: { readonly workspaceFolder?: string; readonly action?: { readonly type?: string } };
-	}
-	const parseFrames = (content: string): IFrame[] => content.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
-	const content = await waitForLogContent(
-		() => readAhpFrames(path.join(logsPath, 'ahp')),
-		content => parseFrames(content).some(frame => frame._ahpLog?.transport === 'devcontainer' && JSON.stringify(frame).includes(reply)),
-		30_000,
-	);
-	const frames = parseFrames(content);
-	assert.ok(frames.some(frame =>
-		frame._ahpLog?.transport === transport
-		&& frame.method === 'vscode/devContainers/connect'
-		&& frame.params?.workspaceFolder === workspacePath
-	), `Expected container startup for the selected workspace on the ${transport} connection`);
-	const containerFrames = frames.filter(frame => frame._ahpLog?.transport === 'devcontainer');
-	assert.ok(containerFrames.some(frame => frame.method === 'dispatchAction' && frame.params?.action?.type === 'chat/turnStarted'), 'Expected a turn sent through the nested Dev Container transport');
-	assert.ok(containerFrames.some(frame => JSON.stringify(frame).includes(reply)), 'Expected the mock response on the nested Dev Container transport');
-}
-
 /**
  * Polls `readContent` until it returns a string matching `matcher` or the
  * timeout elapses, then returns the last content read. Log files in these
@@ -705,11 +682,4 @@ function readAhpFrames(ahpLogDir: string): string {
 	return ahpJsonlFiles(ahpLogDir).map(f => fs.readFileSync(path.join(ahpLogDir, f), 'utf8')).join('\n');
 }
 
-function readRendererLogs(logsPath: string): string {
-	return fs.existsSync(logsPath)
-		? fs.readdirSync(logsPath, { withFileTypes: true })
-			.filter(entry => entry.isDirectory() && /^window\d+$/.test(entry.name))
-			.map(entry => readFileIfExists(path.join(logsPath, entry.name, 'renderer.log')))
-			.join('\n')
-		: '';
-}
+
