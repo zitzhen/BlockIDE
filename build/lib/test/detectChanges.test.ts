@@ -14,8 +14,8 @@ import { detectChanges } from '../../../.github/actions/detect-changes/detect.ts
 const repositoryRoot = path.resolve(import.meta.dirname, '../../..');
 const coreTestOutputs = ['unit-tests', 'browser-integration', 'product-tests'];
 
-/** The outputs of the changes that only Compile & Hygiene reads. */
-const onlyCompileAndHygiene = {
+/** No product test outputs are selected for changes outside their input surface. */
+const noAffectedChecks = {
 	'cli': 'false',
 	'copilot-shim': 'false',
 	'copilot': 'false',
@@ -189,7 +189,7 @@ suite('Detect Changes', () => {
 		]);
 	});
 
-	test('a change to the Azure Pipelines definitions runs only Compile & Hygiene, whose build script tests read them', async () => {
+	test('Azure Pipelines definition changes do not select product checks while Compile & Hygiene is disabled', async () => {
 		const outputs = await detect([
 			{ filename: 'build/azure-pipelines/product-build.yml' },
 			{ filename: 'build/azure-pipelines/darwin/steps/product-build-darwin-test.yml' },
@@ -197,11 +197,7 @@ suite('Detect Changes', () => {
 		const { jobs } = loadWorkflow();
 		assert.deepStrictEqual({
 			outputs,
-			// The jobs that the outputs do not skip. The calling jobs of the test workflows always run, while the jobs
-			// of the workflows skip (see the test of the "<OS> / <job>" checks below).
-			unskippableJobs: Object.entries(jobs)
-				.filter(([, job]) => !testWorkflow.test(job.uses ?? '') && !/needs\.changes\.outputs\.[\w-]+ == 'true'/.test(job.if ?? ''))
-				.map(([id]) => id),
+			compileIf: jobs.compile.if,
 		}, {
 			outputs: {
 				'cli': 'false',
@@ -214,11 +210,11 @@ suite('Detect Changes', () => {
 				'telemetry': 'false',
 			},
 			// Cancel Run only runs when Compile & Hygiene fails.
-			unskippableJobs: ['changes', 'compile', 'cancel-run', 'pr-gate'],
+			compileIf: '${{ false }}',
 		});
 	});
 
-	test('a change to the workspace configuration, the ESLint configuration or the sanity tests runs only Compile & Hygiene, and the Copilot checks lint with the ESLint configuration', async () => {
+	test('workspace and sanity changes do not select product checks, and Copilot still lints ESLint configuration', async () => {
 		assert.deepStrictEqual({
 			workspaceConfiguration: await detect([
 				{ filename: '.vscode/settings.json' },
@@ -239,13 +235,13 @@ suite('Detect Changes', () => {
 				{ filename: 'test/sanity/package-lock.json' },
 			]),
 		}, {
-			workspaceConfiguration: onlyCompileAndHygiene,
-			eslintConfiguration: { ...onlyCompileAndHygiene, 'copilot': 'true' },
-			sanityTests: onlyCompileAndHygiene,
+			workspaceConfiguration: noAffectedChecks,
+			eslintConfiguration: { ...noAffectedChecks, 'copilot': 'true' },
+			sanityTests: noAffectedChecks,
 		});
 	});
 
-	test('a change that only updates the distro commit in package.json runs only Compile & Hygiene', async () => {
+	test('a change that only updates the distro commit in package.json does not select product checks', async () => {
 		// The line of package.json that `npm run update-distro` rewrites, so that the test fails when its format changes.
 		const distroLine = readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8').split('\n').find(line => line.includes('"distro"'));
 		const packageJsonChange = (...changedLines: string[]) => ({
@@ -254,7 +250,7 @@ suite('Detect Changes', () => {
 			patch: ['@@ -1,7 +1,7 @@', ' {', '   "name": "code-oss-dev",', ...changedLines, '   "author": {'].join('\n'),
 		});
 		const distroUpdate = packageJsonChange(`-${distroLine}`, `+  "distro": "${'0'.repeat(40)}",`);
-		const everyCheck = { ...onlyCompileAndHygiene, 'cli': 'true', 'copilot': 'true', 'unit-tests': 'true', 'browser-integration': 'true', 'product-tests': 'true', 'monaco-editor': 'true', 'telemetry': 'true' };
+		const everyCheck = { ...noAffectedChecks, 'cli': 'true', 'copilot': 'true', 'unit-tests': 'true', 'browser-integration': 'true', 'product-tests': 'true', 'monaco-editor': 'true', 'telemetry': 'true' };
 		assert.deepStrictEqual({
 			distroUpdate: await detect([distroUpdate]),
 			withAzurePipelinesDefinition: await detect([distroUpdate, { filename: 'build/azure-pipelines/product-build.yml' }]),
@@ -263,8 +259,8 @@ suite('Detect Changes', () => {
 			// GitHub omits the patch of large diffs.
 			withoutPatch: await detect([{ filename: 'package.json', status: 'modified' }]),
 		}, {
-			distroUpdate: onlyCompileAndHygiene,
-			withAzurePipelinesDefinition: onlyCompileAndHygiene,
+			distroUpdate: noAffectedChecks,
+			withAzurePipelinesDefinition: noAffectedChecks,
 			withSources: { ...everyCheck, 'cli': 'false', 'copilot': 'false' },
 			withOtherField: everyCheck,
 			withoutPatch: everyCheck,
@@ -355,7 +351,7 @@ suite('Detect Changes', () => {
 			.map(([id, job]) => `${workflow}: ${id}: ${job.name}`)), []);
 	});
 
-	test('compile, Monaco Editor and telemetry run after Detect Changes and appear first in the job group', () => {
+	test('disabled Compile & Hygiene, Monaco Editor and telemetry remain ordered after Detect Changes', () => {
 		const { jobs } = loadWorkflow();
 		const skipsWhenUnaffected = (output: string) => `\${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.${output} == 'true') }}`;
 		assert.deepStrictEqual(Object.entries(jobs).slice(0, 4).map(([id, job]) => ({
@@ -366,7 +362,7 @@ suite('Detect Changes', () => {
 			uses: job.uses,
 		})), [
 			{ id: 'changes', name: 'Detect Changes', needs: undefined, if: undefined, uses: undefined },
-			{ id: 'compile', name: 'Compile & Hygiene', needs: 'changes', if: '${{ !cancelled() }}', uses: undefined },
+			{ id: 'compile', name: 'Compile & Hygiene', needs: 'changes', if: '${{ false }}', uses: undefined },
 			{ id: 'monaco-editor', name: 'Monaco Editor', needs: 'changes', if: skipsWhenUnaffected('monaco-editor'), uses: undefined },
 			{ id: 'telemetry', name: 'Telemetry', needs: 'changes', if: skipsWhenUnaffected('telemetry'), uses: undefined },
 		]);

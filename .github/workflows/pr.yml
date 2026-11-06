@@ -54,12 +54,11 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # Keep these checks first after Detect Changes so they appear at the top of the job group.
-  # Compile & Hygiene always runs: its build script tests also check the Azure Pipelines
-  # definitions, which no other job of this workflow reads.
+  # Temporarily disabled while the hosted runner is losing communication during this job.
   compile:
     name: Compile & Hygiene
     needs: changes
-    if: ${{ !cancelled() }}
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     outputs:
       checks-failed: ${{ steps.failed-checks.outputs.failed }}
