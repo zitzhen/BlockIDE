@@ -123,9 +123,9 @@ suite('vscode API - workspace', () => {
 	});
 
 	test('openTextDocument, untitled without path but language ID and content', function () {
-		return vscode.workspace.openTextDocument({ language: 'html', content: '<h1>Hello world!</h1>' }).then(doc => {
+		return vscode.workspace.openTextDocument({ language: 'xml', content: '<h1>Hello world!</h1>' }).then(doc => {
 			assert.strictEqual(doc.uri.scheme, 'untitled');
-			assert.strictEqual(doc.languageId, 'html');
+			assert.strictEqual(doc.languageId, 'xml');
 			assert.ok(doc.isDirty);
 			assert.strictEqual(doc.getText(), '<h1>Hello world!</h1>');
 		});

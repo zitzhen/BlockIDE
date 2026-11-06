@@ -51,9 +51,9 @@ function readRepositoryFile(relativePath: string): Buffer {
  * user profile and is part of the cache version.
  */
 const runners: Record<string, { platform: string; arch: string; os: ICacheWarmingJob['os']; electronCachePath: string }> = {
-	'vscode-large-runners-ubuntu-8-core': { platform: 'linux', arch: 'x64', os: 'Linux', electronCachePath: '/home/runner/.cache/electron' },
-	'vscode-large-runners-windows-8-core': { platform: 'win32', arch: 'x64', os: 'Windows', electronCachePath: 'C:\\Users\\runneradmin\\AppData\\Local\\electron\\Cache' },
-	'vscode-large-runners-macos-5-core-0': { platform: 'darwin', arch: 'arm64', os: 'macOS', electronCachePath: '/Users/runner/Library/Caches/electron' },
+	'ubuntu-24.04': { platform: 'linux', arch: 'x64', os: 'Linux', electronCachePath: '/home/runner/.cache/electron' },
+	'windows-2025': { platform: 'win32', arch: 'x64', os: 'Windows', electronCachePath: 'C:\\Users\\runneradmin\\AppData\\Local\\electron\\Cache' },
+	'macos-latest': { platform: 'darwin', arch: 'arm64', os: 'macOS', electronCachePath: '/Users/runner/Library/Caches/electron' },
 };
 
 function getRunner(job: IJob, name: string) {

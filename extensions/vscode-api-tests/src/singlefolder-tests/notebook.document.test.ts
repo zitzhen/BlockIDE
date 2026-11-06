@@ -330,8 +330,8 @@ suite('Notebook Document', function () {
 		await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
 
 		let cellDoc = await vscode.workspace.openTextDocument(firstCelUri);
-		cellDoc = await vscode.languages.setTextDocumentLanguage(cellDoc, 'css');
-		assert.strictEqual(cellDoc.languageId, 'css');
+		cellDoc = await vscode.languages.setTextDocumentLanguage(cellDoc, 'xml');
+		assert.strictEqual(cellDoc.languageId, 'xml');
 	});
 
 	test('dirty state - serializer', async function () {

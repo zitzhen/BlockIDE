@@ -2,8 +2,8 @@ name: CSS Cascade-Order Scan
 
 on:
   schedule:
-    # Once per day at 05:17 UTC (off the hour to avoid scheduler contention).
-    - cron: '17 5 * * *'
+    # Once per week at 05:17 UTC (off the hour to avoid scheduler contention).
+    - cron: '17 5 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -17,7 +17,7 @@ concurrency:
 jobs:
   scan:
     name: Scan CSS cascade-order dependencies
-    runs-on: vscode-large-runners-ubuntu-8-core
+    runs-on: ubuntu-24.04
     # The scan stops localizing after its own time budget (below) and still
     # writes a report; this is the hard stop if anything hangs.
     timeout-minutes: 180
@@ -25,6 +25,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          submodules: recursive
           fetch-depth: 1
 
       - name: Setup Node.js

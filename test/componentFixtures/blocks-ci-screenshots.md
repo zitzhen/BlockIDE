@@ -67,7 +67,7 @@
 ![screenshot](https://hediet-screenshots.azurewebsites.net/images/07cc96d028f69fd9609b88fa23b1c087cde223393dd0fd9ad6341e480068db95)
 
 #### editor/injectedTextDecorations/ColorDecorators/Light
-![screenshot](https://hediet-screenshots.azurewebsites.net/images/ca4563d37cccd40a5f49e1d6075dde7bbf085b718ca52a3e22d91e5d951242d2)
+![screenshot](https://hediet-screenshots.azurewebsites.net/images/72eb474ddffe85d356c26a29359337ff8ea748716376fe1d7861f84f9c746d4f)
 
 #### editor/injectedTextDecorations/InlayHints/Light
 ![screenshot](https://hediet-screenshots.azurewebsites.net/images/76ab9ccd41b2b1a400c2feece58e56e8f49cad84023ed07708305e2ed75db8f5)
@@ -76,7 +76,7 @@
 ![screenshot](https://hediet-screenshots.azurewebsites.net/images/4aaae3363f8f4637ecde8de278eefc8a04f04a70f0ba6567309d9e8c76e8a260)
 
 #### editor/injectedTextDecorations/SelectedColorDecorator/Light
-![screenshot](https://hediet-screenshots.azurewebsites.net/images/ba9f3a1f916231953b82851a61bafbe0e2738056cac9d9a5be47da573d8ea5da)
+![screenshot](https://hediet-screenshots.azurewebsites.net/images/f530eaa95aa2ca7e7a6f4c3b9a7df82becdba7bd536383e04b1a722070f2f3ec)
 
 #### editor/inlineChatZoneWidget/InlineChatZoneWidget/Light
 ![screenshot](https://hediet-screenshots.azurewebsites.net/images/149a3762c5eef80f2a1c74385c9d45871821de012a9cc36ecaa8d22858ac1ad2)

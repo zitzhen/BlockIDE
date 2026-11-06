@@ -66,20 +66,18 @@ jobs:
   electron-unit:
     name: Electron-Unit
     if: ${{ inputs.electron_unit_affected }}
-    runs-on: vscode-large-runners-windows-8-core
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: electron-unit
       ELECTRON_TESTS: 'true'
       UNIT_TESTS: 'true'
       TEST_SELECTION: 'true'
     steps: &steps
-      # The larger runners keep the workspace on the OS disk, where creating many small files, such as
-      # extracting node_modules, takes twice as long as on the 1ES runners' temporary disk. A Dev Drive in
-      # a VHDX on the same disk is faster than both. It is mounted at the parent of the workspace, so that
-      # the workspace keeps its path and is an ordinary, empty folder for actions/checkout, which cannot
-      # clear the root of a volume. The smoke test shard with the WSL suite runs on the 1ES pool (see the
-      # runs-on of electron-smoke-1), and WSL cannot open folders on a volume that is mounted in a folder of
-      # drive C: anyway.
+      # Creating many small files, such as extracting node_modules, is slow on the hosted runners' OS
+      # disk. A Dev Drive in a VHDX on the same disk is faster. It is mounted at the parent of the
+      # workspace, so that the workspace keeps its path and is an ordinary, empty folder for
+      # actions/checkout, which cannot clear the root of a volume. The shard that provisions WSL skips
+      # this step, because WSL cannot open folders on a volume that is mounted in a folder of drive C:.
       - name: Move the workspace to a Dev Drive
         if: ${{ !(env.ELECTRON_TESTS == 'true' && env.SMOKE_TESTS == 'true' && env.SMOKE_SHARD_INDEX == '1') }}
         shell: pwsh
@@ -117,22 +115,8 @@ jobs:
       - name: Checkout microsoft/vscode
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          submodules: recursive
           lfs: true
-
-      # The WSL steps only run in shard 1, which is where test/smoke/src/shard.ts pins the WSL suite.
-      # pr-node-modules.yml fills this cache on main, so pull requests don't download the installer.
-      - name: Restore WSL installer
-        if: ${{ env.ELECTRON_TESTS == 'true' && env.SMOKE_TESTS == 'true' && env.SMOKE_SHARD_INDEX == '1' }}
-        uses: ./.github/actions/restore-wsl-installer
-
-      - name: Prepare WSL Dev Container smoke tests
-        id: wsl-dev-container
-        if: ${{ env.ELECTRON_TESTS == 'true' && env.SMOKE_TESTS == 'true' && env.SMOKE_SHARD_INDEX == '1' }}
-        timeout-minutes: 15
-        shell: pwsh
-        run: .\test\smoke\wslDevContainer.ps1
-        env:
-          WSL_INSTALLER_CACHE_DIR: ${{ github.workspace }}\.build\wsl-installer
 
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -289,7 +273,6 @@ jobs:
           $ErrorActionPreference = "Stop"
           exec { npm run gulp `
             compile-extension:configuration-editing `
-            compile-extension:css-language-features-server `
             compile-extension:emmet `
             compile-extension:git `
             compile-extension:git-base `
@@ -308,6 +291,7 @@ jobs:
             compile-extension:vscode-colorize-perf-tests `
             compile-extension:vscode-test-resolver `
           }
+          exec { npm --prefix extensions/minecraft-workbench run compile }
 
       - name: Diagnostics before integration test runs
         if: ${{ (env.INTEGRATION_TESTS == 'true' || env.AGENT_HOST_E2E_TESTS == 'true') && always() }}
@@ -401,19 +385,6 @@ jobs:
         run: npm run smoketest-no-compile -- --tracing --shard ${{ env.SMOKE_SHARD_INDEX }}/${{ env.SMOKE_SHARD_TOTAL }}
         env:
           VSCODE_SMOKE_TEST_POLICY: '1'
-          # Set in every shard so all shards register the WSL suite and compute the same split
-          VSCODE_SMOKE_TEST_WSL_REQUIRED: '1'
-          VSCODE_SMOKE_TEST_WSL_DISTRO: ${{ steps.wsl-dev-container.outputs.distro }}
-          VSCODE_SMOKE_TEST_WSL_SERVER_PATH: ${{ steps.wsl-dev-container.outputs.serverPath }}
-
-      - name: Clean up WSL Dev Container smoke tests
-        if: ${{ always() && steps.wsl-dev-container.outputs.root != '' }}
-        timeout-minutes: 5
-        shell: pwsh
-        env:
-          WSL_SMOKE_DISTRO: ${{ steps.wsl-dev-container.outputs.distro }}
-          WSL_SMOKE_ROOT: ${{ steps.wsl-dev-container.outputs.root }}
-        run: .\test\smoke\wslDevContainer.ps1 -Operation Cleanup -Distribution $env:WSL_SMOKE_DISTRO -Root $env:WSL_SMOKE_ROOT
 
       - name: 🧪 Run smoke tests (Browser, Chromium)
         if: ${{ env.BROWSER_TESTS == 'true' && env.SMOKE_TESTS == 'true' }}
@@ -465,7 +436,7 @@ jobs:
   electron:
     name: Electron
     if: ${{ inputs.electron_affected }}
-    runs-on: vscode-large-runners-windows-8-core
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: electron
       ELECTRON_TESTS: 'true'
@@ -482,7 +453,7 @@ jobs:
   agent-host-e2e-1:
     name: Agent-Host-E2E (shard 1/2)
     if: ${{ inputs.agent_host_e2e_affected }}
-    runs-on: vscode-large-runners-windows-8-core
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: electron-agent-host-e2e-1
       ELECTRON_TESTS: 'true'
@@ -495,7 +466,7 @@ jobs:
   agent-host-e2e-2:
     name: Agent-Host-E2E (shard 2/2)
     if: ${{ inputs.agent_host_e2e_affected }}
-    runs-on: vscode-large-runners-windows-8-core
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: electron-agent-host-e2e-2
       ELECTRON_TESTS: 'true'
@@ -512,12 +483,7 @@ jobs:
   electron-smoke-1:
     name: Electron-Smoke (shard 1/3)
     if: ${{ inputs.electron_smoke_affected }}
-    # GitHub-hosted Windows runners intermittently freeze while WSL2 provisions a distribution
-    # (https://github.com/actions/runner-images/issues/14938): the step timeout never fires, no log is
-    # kept, and the job only fails when GitHub notices that it lost the runner, about 45 minutes later.
-    # That happened in 3 of about 90 runs of the WSL smoke test shard on the larger runners, and in none
-    # of about 740 on the 1ES pool, so this shard runs on the 1ES pool. JobId must be unique per job.
-    runs-on: [ self-hosted, 1ES.Pool=1es-vscode-oss-windows-2022-x64, "JobId=windows-test-wsl-smoke-${{ github.run_id }}-${{ github.run_number }}-${{ github.run_attempt }}" ]
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: electron-smoke-shard1
       ELECTRON_TESTS: 'true'
@@ -529,7 +495,7 @@ jobs:
   electron-smoke-2:
     name: Electron-Smoke (shard 2/3)
     if: ${{ inputs.electron_smoke_affected }}
-    runs-on: vscode-large-runners-windows-8-core
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: electron-smoke-shard2
       ELECTRON_TESTS: 'true'
@@ -541,7 +507,7 @@ jobs:
   electron-smoke-3:
     name: Electron-Smoke (shard 3/3)
     if: ${{ inputs.electron_smoke_affected }}
-    runs-on: vscode-large-runners-windows-8-core
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: electron-smoke-shard3
       ELECTRON_TESTS: 'true'
@@ -553,7 +519,7 @@ jobs:
   browser-unit:
     name: Browser-Unit
     if: ${{ inputs.browser_unit_affected }}
-    runs-on: vscode-large-runners-windows-8-core
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: browser-unit
       BROWSER_TESTS: 'true'
@@ -564,7 +530,7 @@ jobs:
   browser:
     name: Browser
     if: ${{ inputs.browser_affected }}
-    runs-on: vscode-large-runners-windows-8-core
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: browser
       BROWSER_TESTS: 'true'
@@ -577,7 +543,7 @@ jobs:
   remote-integration:
     name: Remote (integration)
     if: ${{ inputs.remote_affected }}
-    runs-on: vscode-large-runners-windows-8-core
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: remote
       REMOTE_TESTS: 'true'
@@ -587,7 +553,7 @@ jobs:
   remote-smoke:
     name: Remote (smoke)
     if: ${{ inputs.remote_affected }}
-    runs-on: vscode-large-runners-windows-8-core
+    runs-on: windows-2025
     env:
       ARTIFACT_NAME: remote-smoke
       REMOTE_TESTS: 'true'

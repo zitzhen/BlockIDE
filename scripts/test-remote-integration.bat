@@ -82,11 +82,6 @@ call "%INTEGRATION_TEST_ELECTRON_PATH%" --folder-uri=%REMOTE_EXT_PATH%/markdown-
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 echo.
-echo ### Emmet tests
-call "%INTEGRATION_TEST_ELECTRON_PATH%" --folder-uri=%REMOTE_EXT_PATH%/emmet/test-workspace --extensionDevelopmentPath=%REMOTE_EXT_PATH%/emmet --extensionTestsPath=%REMOTE_EXT_PATH%/emmet/out/test %API_TESTS_EXTRA_ARGS% %API_TESTS_EXTRA_ARGS_BUILT%
-if %errorlevel% neq 0 exit /b %errorlevel%
-
-echo.
 echo ### Git tests
 for /f "delims=" %%i in ('node -p "require('fs').realpathSync.native(require('os').tmpdir())"') do set TEMPDIR=%%i
 set GITWORKSPACE=%TEMPDIR%\git-%RANDOM%

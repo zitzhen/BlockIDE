@@ -60,11 +60,6 @@ call node .\test\integration\browser\out\index.js --workspacePath=.\extensions\m
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 echo.
-echo ### Emmet tests
-call node .\test\integration\browser\out\index.js --workspacePath=.\extensions\emmet\test-workspace --extensionDevelopmentPath=.\extensions\emmet --extensionTestsPath=.\extensions\emmet\out\test %*
-if %errorlevel% neq 0 exit /b %errorlevel%
-
-echo.
 echo ### Git tests
 for /f "delims=" %%i in ('node -p "require('fs').realpathSync.native(require('os').tmpdir())"') do set TEMPDIR=%%i
 set GITWORKSPACE=%TEMPDIR%\git-%RANDOM%

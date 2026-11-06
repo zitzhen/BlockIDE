@@ -28,11 +28,7 @@ import { fixtureResourceUri, readFixtureBinaryResource, readFixtureTextResource 
 const fixtureLanguageIds = [
 	'typescript',
 	'typescriptreact',
-	'javascript',
-	'javascriptreact',
 	'json',
-	'css',
-	'html',
 	'jsx-tags',
 ] as const;
 

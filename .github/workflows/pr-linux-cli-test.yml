@@ -27,12 +27,14 @@ jobs:
   cli:
     name: CLI
     if: ${{ inputs.cli_affected }}
-    runs-on: vscode-large-runners-ubuntu-8-core
+    runs-on: ubuntu-24.04
     env:
       CRATE_DIRECTORY: cli
     steps: &steps
       - name: Checkout microsoft/vscode
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
 
       - name: Install Rust
         run: |
@@ -88,7 +90,7 @@ jobs:
   copilot-shim:
     name: Copilot Shim
     if: ${{ inputs.copilot_shim_affected }}
-    runs-on: vscode-large-runners-ubuntu-8-core
+    runs-on: ubuntu-24.04
     env:
       CRATE_DIRECTORY: copilot_shim
       CHECK_FORMATTING: 'true'

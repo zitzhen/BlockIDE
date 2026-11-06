@@ -93,7 +93,6 @@ export const cacheWarmingJobs: Readonly<Record<string, ICacheWarmingJob>> = {
 		os: 'Windows',
 		nodeModules: { prefix: 'node_modules-windows', args: ['win32', 'x64', 'x64'] },
 		electron: { arch: 'x64' },
-		wslInstaller: true,
 	},
 	'copilot-linux': {
 		os: 'Linux',

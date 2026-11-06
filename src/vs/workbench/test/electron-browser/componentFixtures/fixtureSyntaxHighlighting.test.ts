@@ -54,11 +54,7 @@ suite('Component fixture TextMate syntax highlighting', () => {
 		const samples = new Map([
 			['typescript', 'const value: number = 1;'],
 			['typescriptreact', 'const view = <div>{value}</div>;'],
-			['javascript', 'const value = /actual+/gi;'],
-			['javascriptreact', 'const view = <div>{value}</div>;'],
 			['json', '{ "enabled": true }'],
-			['css', '.fixture { color: #ff7b72; }'],
-			['html', '<main class="fixture">text</main>'],
 		]);
 
 		const actual = [...samples].map(([languageId, line]) => {
@@ -76,11 +72,7 @@ suite('Component fixture TextMate syntax highlighting', () => {
 		assert.deepStrictEqual(actual, [
 			{ languageId: 'typescript', registered: true, tokenCount: 11, encodedLanguageIds: ['typescript'] },
 			{ languageId: 'typescriptreact', registered: true, tokenCount: 16, encodedLanguageIds: ['typescriptreact', 'jsx-tags'] },
-			{ languageId: 'javascript', registered: true, tokenCount: 10, encodedLanguageIds: ['javascript'] },
-			{ languageId: 'javascriptreact', registered: true, tokenCount: 16, encodedLanguageIds: ['javascriptreact', 'jsx-tags'] },
 			{ languageId: 'json', registered: true, tokenCount: 5, encodedLanguageIds: ['json'] },
-			{ languageId: 'css', registered: true, tokenCount: 6, encodedLanguageIds: ['css'] },
-			{ languageId: 'html', registered: true, tokenCount: 11, encodedLanguageIds: ['html'] },
 		]);
 	});
 
@@ -117,20 +109,20 @@ suite('Component fixture TextMate syntax highlighting', () => {
 		const commentEndLine = 'continued */ const value = 1;';
 		const commentEnd = typescript.tokenizeEncoded(commentEndLine, true, commentStart.endState);
 
-		const html = TokenizationRegistry.get('html')!;
-		const scriptStart = html.tokenizeEncoded('<script>', true, html.getInitialState());
-		const embeddedScript = html.tokenizeEncoded('const value = 1;', true, scriptStart.endState);
+		const tsx = TokenizationRegistry.get('typescriptreact')!;
+		const viewLine = 'const view = <div>{value}</div>;';
+		const embeddedView = tsx.tokenizeEncoded(viewLine, true, tsx.getInitialState());
 
 		assert.deepStrictEqual({
 			stateChanged: !commentStart.endState.equals(initialState),
 			continuedComment: colorAt(commentEnd.tokens, 0),
 			constAfterComment: colorAt(commentEnd.tokens, commentEndLine.indexOf('const')),
-			embeddedLanguages: distinctLanguageIds(embeddedScript.tokens).map(id => languageService.languageIdCodec.decodeLanguageId(id)),
+			embeddedLanguages: distinctLanguageIds(embeddedView.tokens).map(id => languageService.languageIdCodec.decodeLanguageId(id)),
 		}, {
 			stateChanged: true,
 			continuedComment: '#8b949e',
 			constAfterComment: '#ff7b72',
-			embeddedLanguages: ['javascript'],
+			embeddedLanguages: ['typescriptreact', 'jsx-tags'],
 		});
 	});
 
