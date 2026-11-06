@@ -2701,6 +2701,7 @@ export class CopilotAgentSession extends Disposable {
 		const turn = this._currentTurn.value;
 		if (turn) {
 			turn.messageCharLen = steering.pendingMessage.message.text.length;
+			turn.sdkSendInvoked = true;
 			turn.markRunning();
 		}
 		if (preservesFusionState) {
