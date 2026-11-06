@@ -32,13 +32,13 @@ import { RemoteAgentHostConnectionStatus } from '../../../../../platform/agentHo
 import { getSessionWorkspaceProperties } from '../../../../../platform/agentHost/common/sessionConfigProperties.js';
 import { localize } from '../../../../../nls.js';
 import { ICreateNewSessionOptions, ISendRequestOptions, ISessionsManagementService, WorkspaceNotTrustedError } from '../../common/sessionsManagement.js';
-import { GITHUB_REMOTE_FILE_SCHEME, ISession, ISessionWorkspace, isSessionCreated, SESSION_WORKSPACE_GROUP_GITHUB } from '../../../../services/sessions/common/session.js';
+import { GITHUB_REMOTE_FILE_SCHEME, ISession, ISessionWorkspace, isSessionCreated, SESSION_WORKSPACE_GROUP_GITHUB } from '../../common/session.js';
 import { IOpenNewSessionResult, ISessionsService } from '../sessionsService.js';
-import { getMainWindowHost, ISessionHostService } from '../../../../services/sessions/browser/sessionHost.js';
+import { getMainWindowHost, ISessionHostService } from '../sessionHost.js';
 import { ISessionsProvidersService } from '../sessionsProvidersService.js';
 import { ISessionsProvider } from '../../common/sessionsProvider.js';
 import { getNoWorkspaceDescription, getQuickChatProviderLabel, getRemoteQuickChatSelectedLabel } from './noWorkspaceChoice.js';
-import { shouldShowGitHubWorkspaceGroupSignIn } from '../../../../services/sessions/browser/sessionsAuthGate.js';
+import { shouldShowGitHubWorkspaceGroupSignIn } from '../sessionsAuthGate.js';
 import { AGENTIC_SIGN_IN_COMMAND_ID, FOCUS_NEW_SESSION_ENVIRONMENT_PICKER_COMMAND_ID, FOCUS_NEW_SESSION_HARNESS_PICKER_COMMAND_ID, FOCUS_NEW_SESSION_WORKSPACE_PICKER_COMMAND_ID } from '../../common/sessionCommands.js';
 import { isAgentHostEnvironmentAvailable, isAgentHostProvider, LOCAL_AGENT_HOST_PROVIDER_ID } from '../../common/agentHostSessionsProvider.js';
 import { NewSessionComposerFocusContext, NewSessionCreationProviderIdContext } from '../../common/contextkeys.js';
@@ -56,7 +56,7 @@ import { IChatRequestVariableEntry } from '../../../chat/common/attachments/chat
 import { IAgentHostFilterService } from '../../common/agentHostFilter.js';
 import { IChatViewOptions } from '../parts/chatView.js';
 import { NewChatUserInteraction } from './newChatUserInteraction.js';
-import { WorkspaceSelectionOrigin, ISelectNoWorkspaceOptions, ISelectWorkspaceOptions, WorkspaceSelectionResult } from '../../../../services/sessions/common/workspaceSelection.js';
+import { WorkspaceSelectionOrigin, ISelectNoWorkspaceOptions, ISelectWorkspaceOptions, WorkspaceSelectionResult } from '../../common/workspaceSelection.js';
 import { ISessionPickerFocusOptions, ISessionPickerVisibility, noSessionPickerVisibility } from '../../common/sessionPickerVisibility.js';
 import { AGENT_FEEDBACK_NEW_SESSION_RESOURCE, IAgentFeedbackService } from '../agentFeedback.js';
 import { AgentFeedbackState, IAgentFeedback } from '../agentFeedbackModel.js';
@@ -101,6 +101,7 @@ import { AccessibilityVerbositySettingId } from '../../../accessibility/browser/
 import { ISessionsRecentWorkspacesService } from '../sessionsRecentWorkspacesService.js';
 import { filterConfigurationToSchema } from '../../../chat/browser/widget/input/chatModelConfigurationLogic.js';
 import { createSessionComparisonHarness } from '../sessionComparisonConfiguration.js';
+import { SESSIONS_LIST_INBOX_ENABLED_SETTING } from '../../common/sessionConfig.js';
 
 // #region --- New Chat Widget ---
 
@@ -442,15 +443,11 @@ export class NewChatWidget extends Disposable {
 			session?.workspace.read(reader);
 			session?.loading.read(reader);
 			session?.isQuickChat?.read(reader);
-			return this._shouldShowComparisonAction(reader);
+			return this._shouldShowComparisonAction();
 		}), modelId => this.languageModelsService.lookupLanguageModel(modelId)?.name,
 			constObservable(true),
 			observableFromEvent(this, Event.filter(this.configurationService.onDidChangeConfiguration, event => event.affectsConfiguration(COMPARE_AGENTS_SHOW_PICKER_HINT_SETTING)),
-				() => this.configurationService.getValue<boolean>(COMPARE_AGENTS_SHOW_PICKER_HINT_SETTING)),
-			derived(this, reader => {
-				const session = this._session.read(reader);
-				return !session || session.loading.read(reader) || comparisonConfigResolving.read(reader);
-			})));
+				() => this.configurationService.getValue<boolean>(COMPARE_AGENTS_SHOW_PICKER_HINT_SETTING))));
 		const canSendRequest = derived(reader => {
 			const session = this._session.read(reader);
 			if (!session) {
@@ -496,6 +493,7 @@ export class NewChatWidget extends Disposable {
 		this._register(autorun(reader => creationProviderKey.set(creationProviderId.read(reader) ?? '')));
 		this._register(toDisposable(() => creationProviderKey.reset()));
 
+		const backgroundSend = this._backgroundSend;
 		const newChatInput = this.instantiationService.createInstance(SharedChatInputComposer, {
 			inputEditorOptions: this.options.inputEditorOptions,
 			session: this._session,
@@ -508,7 +506,7 @@ export class NewChatWidget extends Disposable {
 			onDidChangeWorkspaceSelection: Event.any(this._workspacePicker.onDidChangeSelection, Event.fromObservableLight(this._isQuickChatComposer)),
 			canApplyWorkspaceDefault: () => this._canApplyWorkspaceDefault(),
 			sendRequest: async ({ query, attachments, background, userInteraction }) => this._send(query, attachments, background, userInteraction),
-			preserveInputFocusOnSend: this._backgroundSend,
+			get preserveInputFocusOnSend() { return backgroundSend || configurationService.getValue<boolean>(SESSIONS_LIST_INBOX_ENABLED_SETTING) === true; },
 			confirmSend: async query => this._comparisonSelection.enabled.get() || !this._worktreeSuggestion || this._worktreeSuggestion.confirmBeforeSend(query),
 			modelPickerComparison: this._comparisonSelection,
 			sendButtonLabel: derived(this, reader => this._comparisonSelection.enabled.read(reader)
@@ -1665,14 +1663,8 @@ export class NewChatWidget extends Disposable {
 		}
 	}
 
-	private _getComparisonBranch(session = this._session.get(), reader?: IReader): string | undefined {
+	private _getComparisonBranch(session = this._session.get()): string | undefined {
 		const selectedFolderUri = this._workspacePicker.selectedFolderUri;
-		const sessionRepository = getComparisonSessionFolder(session, selectedFolderUri)?.gitRepository;
-		const selectedWorkspaceRepository = getComparisonSelectedWorkspaceFolder(this._workspacePicker.selectedResolved?.workspace, selectedFolderUri)?.gitRepository;
-		const repository = sessionRepository ?? selectedWorkspaceRepository;
-		if (repository?.isRepository?.read(reader) === false) {
-			return undefined;
-		}
 		const provider = session ? this.sessionsProvidersService.getProvider(session.providerId, session.sessionId) : undefined;
 		const matchesSelectedFolder = !selectedFolderUri || !!session?.workspace.get()?.folders.some(folder => isEqual(folder.root, selectedFolderUri));
 		if (session && provider && isAgentHostProvider(provider) && matchesSelectedFolder) {
@@ -1684,10 +1676,12 @@ export class NewChatWidget extends Disposable {
 				return branch;
 			}
 		}
+		const selectedWorkspaceRepository = getComparisonSelectedWorkspaceFolder(this._workspacePicker.selectedResolved?.workspace, selectedFolderUri)?.gitRepository;
 		const selectedWorkspaceBranch = selectedWorkspaceRepository?.branchName?.trim() || selectedWorkspaceRepository?.baseBranchName?.trim();
 		if (selectedWorkspaceBranch) {
 			return selectedWorkspaceBranch;
 		}
+		const sessionRepository = getComparisonSessionFolder(session, selectedFolderUri)?.gitRepository;
 		const workspaceBranch = sessionRepository?.branchName?.trim() || sessionRepository?.baseBranchName?.trim();
 		if (workspaceBranch) {
 			return workspaceBranch;
@@ -1701,7 +1695,7 @@ export class NewChatWidget extends Disposable {
 			.map(model => model.identifier));
 	}
 
-	private _shouldShowComparisonAction(reader?: IReader): boolean {
+	private _shouldShowComparisonAction(): boolean {
 		const session = this._session.get();
 		const provider = session ? this.sessionsProvidersService.getProvider(session.providerId, session.sessionId) : undefined;
 		const selectedFolderUri = this._workspacePicker.selectedFolderUri;
@@ -1717,7 +1711,7 @@ export class NewChatWidget extends Disposable {
 		if (!sessionMatchesSelectedFolder) {
 			return false;
 		}
-		if (this._getComparisonBranch(session, reader) === undefined) {
+		if (this._getComparisonBranch(session) === undefined) {
 			return false;
 		}
 		const sessionConfig = session && providerIsAgentHost && !resolvingConfig ? provider.getSessionConfig(session.sessionId, session.mainChat.get().resource) : undefined;
@@ -1889,7 +1883,7 @@ export class NewChatWidget extends Disposable {
 
 	// --- Send ---
 
-	private async _sendComparison(session: ISession, request: string, requestContext: ReadonlyMap<string, IChatRequestVariableEntry>): Promise<boolean> {
+	private async _sendComparison(session: ISession, request: string, requestContext: ReadonlyMap<string, IChatRequestVariableEntry>, background = this._backgroundSend): Promise<boolean> {
 		try {
 			const provider = this.sessionsProvidersService.getProvider(session.providerId, session.sessionId);
 			if (this._environment.get()?.kind === 'container' || provider && isAgentHostProvider(provider) && provider.isDevContainerRequested?.(session.sessionId)) {
@@ -1955,7 +1949,7 @@ export class NewChatWidget extends Disposable {
 				branch,
 			});
 			try {
-				if (this._backgroundSend) {
+				if (background) {
 					if (!this._store.isDisposed && !this._pendingWorkspaceCreation
 						&& this.sessionsManagementService.newSession.get()?.sessionId === session.sessionId
 						&& (this._preserveCustomView || getMainWindowHost(this.sessionHostService).session.get()?.sessionId === session.sessionId)
@@ -1979,7 +1973,7 @@ export class NewChatWidget extends Disposable {
 				this.logService.error('Failed to open session comparison:', error);
 				this.notificationService.error(error);
 			} finally {
-				if (!this._backgroundSend) {
+				if (!background) {
 					this._comparisonSelection.reset();
 				}
 			}
@@ -1993,7 +1987,8 @@ export class NewChatWidget extends Disposable {
 
 	private async _send(query: string, attachedContext?: IChatRequestVariableEntry[], background?: boolean, userInteraction?: NewChatUserInteraction): Promise<boolean> {
 		background = this._backgroundSend || background;
-		if (this._backgroundSend) {
+		const showBackgroundSendStatus = this._backgroundSend || !!background && this.configurationService.getValue<boolean>(SESSIONS_LIST_INBOX_ENABLED_SETTING) === true;
+		if (showBackgroundSendStatus) {
 			this._lastBackgroundSentSessionResource = undefined;
 			this._backgroundSendStatus.set(undefined, undefined);
 			this._lastBackgroundSendOptions = undefined;
@@ -2022,8 +2017,8 @@ export class NewChatWidget extends Disposable {
 		}
 
 		if (this._comparisonSelection.enabled.get()) {
-			const started = await this._sendComparison(session, request, requestContext);
-			if (this._backgroundSend && started && !this._newChatInput.hasInput) {
+			const started = await this._sendComparison(session, request, requestContext, showBackgroundSendStatus);
+			if (showBackgroundSendStatus && started && !this._newChatInput.hasInput) {
 				this._backgroundSendStatus.set(localize('newSession.comparisonStarted', "Comparison started"), undefined);
 			}
 			return started;
@@ -2058,7 +2053,7 @@ export class NewChatWidget extends Disposable {
 		// separately, keyed by the options object it was started with, so one
 		// send's outcome never clears another's comments.
 		if (background) {
-			if (this._backgroundSend) {
+			if (showBackgroundSendStatus) {
 				this._lastBackgroundSendOptions = sendOptions;
 			}
 			this._pendingBackgroundSends.set(sendOptions, Event.once(
@@ -2066,7 +2061,7 @@ export class NewChatWidget extends Disposable {
 			)(event => {
 				clearFeedback();
 				restoreWorkspace();
-				if (this._backgroundSend && this._lastBackgroundSendOptions === sendOptions && !this._newChatInput.hasInput) {
+				if (showBackgroundSendStatus && this._lastBackgroundSendOptions === sendOptions && !this._newChatInput.hasInput) {
 					this._lastBackgroundSentSessionResource = event.session.resource;
 					this._backgroundSendStatus.set(localize('newSession.messageSent', "Message sent"), undefined);
 				}
@@ -2174,14 +2169,12 @@ export class NewChatWidget extends Disposable {
 	}
 
 	private _renderBackgroundSendStatus(container: HTMLElement): void {
-		if (!this._backgroundSend) {
-			return;
-		}
 		const status = dom.append(container, dom.$('.new-session-send-status'));
 		this._register(autorun(reader => {
 			const message = this._backgroundSendStatus.read(reader);
 			dom.clearNode(status);
 			status.style.visibility = message ? '' : 'hidden';
+			status.style.display = this._backgroundSend || message ? '' : 'none';
 			if (message) {
 				const checkmark = renderIcon(Codicon.check);
 				checkmark.setAttribute('aria-hidden', 'true');
@@ -2193,7 +2186,7 @@ export class NewChatWidget extends Disposable {
 						label: localize('newSession.openSentSession', "Open Session"),
 						href: sessionResource.toString(),
 					}, {
-						opener: () => { void this.sessionsService.openSession(sessionResource, { source: 'inbox', forceMainChat: true }).catch(onUnexpectedError); },
+						opener: () => { void this.sessionsService.openSession(sessionResource, { source: this._backgroundSend ? 'inbox' : 'link', forceMainChat: true }).catch(onUnexpectedError); },
 					}));
 					const dismissal = reader.store.add(new MutableDisposable<IDisposable>());
 					let remaining = 8000;
