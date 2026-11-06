@@ -35,6 +35,8 @@ jobs:
       cli: ${{ steps.detect.outputs.cli }}
       copilot-shim: ${{ steps.detect.outputs.copilot-shim }}
       copilot: ${{ steps.detect.outputs.copilot }}
+      unit-tests: ${{ steps.detect.outputs.unit-tests }}
+      browser-integration: ${{ steps.detect.outputs.browser-integration }}
       product-tests: ${{ steps.detect.outputs.product-tests }}
       monaco-editor: ${{ steps.detect.outputs.monaco-editor }}
       telemetry: ${{ steps.detect.outputs.telemetry }}
