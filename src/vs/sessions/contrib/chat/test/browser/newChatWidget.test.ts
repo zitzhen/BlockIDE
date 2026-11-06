@@ -3937,7 +3937,8 @@ suite('NewChatWidget', () => {
 		});
 	});
 
-	test('Inbox sends in the background without an explicit background gesture and reseeds its workspace', async () => {
+	for (const backgroundSend of [false, true]) {
+	test(`confirms background sends and reseeds the workspace (always background: ${backgroundSend})`, async () => {
 		const onDidSendRequest = disposables.add(new Emitter<ISendRequestSentEvent>());
 		const pendingSends = disposables.add(new DisposableMap<object, IDisposable>());
 		const folderUri = URI.file('/dismissed');
@@ -3947,7 +3948,7 @@ suite('NewChatWidget', () => {
 		let sentOptions: ISendRequestOptions | undefined;
 		const picker = { selectedFolderUri: folderUri, validateSelectedWorkspace: async () => true, clearAttachedContext: () => { }, showPicker: () => { } };
 		const harness: ISendHarness = {
-			_backgroundSend: true,
+			_backgroundSend: backgroundSend,
 			_backgroundSendStatus: observableValue<string | undefined>('sendStatus', undefined),
 			_newChatInput: { hasInput: false },
 			notificationService: { error: () => assert.fail('Unexpected error') },
@@ -3968,7 +3969,7 @@ suite('NewChatWidget', () => {
 			_getWorkspaceRoots: () => [folderUri],
 			_createNewSession: async () => { picker.selectedFolderUri = URI.file('/different-workspace'); },
 		};
-		await send.call(harness, 'hello');
+		await send.call(harness, 'hello', undefined, backgroundSend ? undefined : true);
 		const beforeSuccess = { restored: [...restored], status: harness._backgroundSendStatus?.get() };
 		onDidSendRequest.fire(upcastPartial<ISendRequestSentEvent>({ options: { query: 'unrelated' } }));
 		const afterUnrelatedSend = { restored: [...restored], status: harness._backgroundSendStatus?.get() };
@@ -3979,6 +3980,7 @@ suite('NewChatWidget', () => {
 			restored: [folderUri], pending: 0, background: true, status: 'Message sent', resource: sentSession.resource,
 		});
 	});
+	}
 
 	for (const outcome of ['failed', 'new draft', 'superseded', 'disposed'] as const) {
 		test(`Inbox does not confirm a background send that is ${outcome}`, async () => {
