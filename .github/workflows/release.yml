@@ -1,0 +1,262 @@
+name: Build & Release
+
+# 构建三平台安装包并创建 GitHub Release。
+# - 手动触发（workflow_dispatch）时可指定 tag，默认按 package.json 版本生成 v<version>
+# - 推送 v* tag 时自动触发
+# - 两种方式默认都创建「草稿(draft)」发布，确认无误后在 GitHub 上点击 Publish release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布标签，留空则使用 v<package.json 版本>'
+        required: false
+        type: string
+      draft:
+        description: '创建为草稿发布（默认开启）'
+        required: false
+        type: boolean
+        default: true
+      prerelease:
+        description: '标记为预发布'
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    name: Release metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      draft: ${{ steps.meta.outputs.draft }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Resolve version, tag and release flags
+        id: meta
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRAFT: ${{ inputs.draft }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${INPUT_TAG}"
+            [ -z "$TAG" ] && TAG="v${VERSION}"
+            DRAFT="${INPUT_DRAFT}"
+            PRERELEASE="${INPUT_PRERELEASE}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            DRAFT="true"
+            PRERELEASE="false"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "draft=$DRAFT" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $TAG (version $VERSION, draft=$DRAFT, prerelease=$PRERELEASE)"
+
+  build:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+          - os: windows-2025
+            platform: win32
+            arch: x64
+          - os: macos-26
+            platform: darwin
+            arch: arm64
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      VSCODE_ARCH: ${{ matrix.arch }}
+      VSCODE_QUALITY: stable
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install build dependencies (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbfile-dev libkrb5-dev fakeroot rpm
+
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci
+
+      # core-ci 负责编译源码并生成 out-vscode-min 等打包产物
+      - name: Compile
+        run: npm run gulp core-ci
+
+      # ---------------------------------------------------------------- Linux
+      - name: Package Linux (tar.gz / deb / rpm)
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+
+          npm run gulp vscode-linux-x64-min-ci
+
+          tar -czf "artifacts/BlockIDE-linux-x64-${VERSION}.tar.gz" \
+            -C "$(dirname "$GITHUB_WORKSPACE")" VSCode-linux-x64
+
+          npm run gulp vscode-linux-x64-prepare-deb
+          npm run gulp vscode-linux-x64-build-deb
+          DEB_PATH="$(find .build/linux/deb -name '*.deb' -print -quit)"
+          cp "$DEB_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.deb"
+
+          npm run gulp vscode-linux-x64-prepare-rpm
+          npm run gulp vscode-linux-x64-build-rpm
+          RPM_PATH="$(find .build/linux/rpm -name '*.rpm' -print -quit)"
+          cp "$RPM_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.rpm"
+
+      - name: Prepare snap
+        if: matrix.platform == 'linux'
+        id: snap-prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run gulp vscode-linux-x64-prepare-snap
+          SNAP_DIR="$(find .build/linux/snap/x64 -maxdepth 1 -mindepth 1 -type d -name 'blockide-*' -print -quit)"
+          echo "dir=$SNAP_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Build snap
+        if: matrix.platform == 'linux'
+        id: snapcraft
+        uses: snapcore/action-build@v1
+        with:
+          path: ${{ steps.snap-prepare.outputs.dir }}
+          snapcraft-channel: 7.x/stable
+
+      - name: Collect snap
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.snapcraft.outputs.snap }}" "artifacts/BlockIDE-linux-x64-${VERSION}.snap"
+
+      # -------------------------------------------------------------- Windows
+      - name: Package Windows (exe / zip)
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+
+          npm run gulp vscode-win32-x64-min-ci
+          npm run gulp vscode-win32-x64-inno-updater
+          npm run gulp vscode-win32-x64-system-setup
+
+          Copy-Item ".build\win32-x64\system-setup\VSCodeSetup.exe" "artifacts\BlockIDE-win32-x64-$env:VERSION.exe"
+
+          Push-Location (Split-Path $env:GITHUB_WORKSPACE)
+          try {
+            7z.exe a -tzip "$env:GITHUB_WORKSPACE\artifacts\BlockIDE-win32-x64-$env:VERSION.zip" "VSCode-win32-x64"
+          } finally {
+            Pop-Location
+          }
+
+      # ----------------------------------------------------------------- macOS
+      - name: Package macOS (zip)
+        if: matrix.platform == 'darwin'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          npm run gulp vscode-darwin-arm64-min-ci
+          (cd "$(dirname "$GITHUB_WORKSPACE")" \
+            && zip -Xry "$GITHUB_WORKSPACE/artifacts/BlockIDE-darwin-arm64-${VERSION}.zip" VSCode-darwin-arm64)
+
+      - name: Package macOS (dmg)
+        if: matrix.platform == 'darwin'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          node build/darwin/create-dmg.ts "$(dirname "$GITHUB_WORKSPACE")" "$GITHUB_WORKSPACE/artifacts"
+          mv "artifacts/VSCode-darwin-arm64.dmg" "artifacts/BlockIDE-darwin-arm64-${VERSION}.dmg"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.platform }}-${{ matrix.arch }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Create draft release
+    needs: [meta, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh dist
+
+      # 默认创建草稿发布；draft / prerelease 由上游 meta job 决定
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          DRAFT: ${{ needs.meta.outputs.draft }}
+          PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, uploading assets with --clobber"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            args=(release create "$TAG" --title "BlockIDE ${VERSION}" --generate-notes --target "$GITHUB_SHA")
+            [ "$DRAFT" = "true" ] && args+=(--draft)
+            [ "$PRERELEASE" = "true" ] && args+=(--prerelease)
+            gh "${args[@]}" dist/*
+          fi
