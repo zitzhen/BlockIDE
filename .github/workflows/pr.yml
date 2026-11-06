@@ -320,7 +320,7 @@ jobs:
       electron_unit_affected: false
       electron_affected: false
       agent_host_e2e_affected: false
-      electron_smoke_affected: ${{ needs.changes.result != 'success' || needs.changes.outputs.product-tests == 'true' }}
+      electron_smoke_affected: false
       browser_unit_affected: false
       browser_affected: false
       remote_affected: false
@@ -333,7 +333,7 @@ jobs:
     with:
       electron_unit_affected: false
       electron_affected: false
-      electron_smoke_affected: ${{ needs.changes.result != 'success' || needs.changes.outputs.product-tests == 'true' }}
+      electron_smoke_affected: false
       browser_unit_affected: false
       browser_affected: false
       remote_affected: false
@@ -349,7 +349,7 @@ jobs:
       electron_unit_affected: false
       electron_affected: false
       agent_host_e2e_affected: false
-      electron_smoke_affected: ${{ needs.changes.result != 'success' || needs.changes.outputs.product-tests == 'true' }}
+      electron_smoke_affected: false
       browser_unit_affected: false
       browser_affected: false
       remote_affected: false

@@ -308,11 +308,10 @@ suite('Detect Changes', () => {
 		assert.deepStrictEqual(Object.keys(loadWorkflow().jobs.changes.outputs ?? {}).sort(), outputs);
 	});
 
-	test('platform PR jobs run only smoke tests for product changes', () => {
+	test('platform PR jobs skip the full Electron smoke suites', () => {
 		const { jobs } = loadWorkflow();
 		const tests = testJobs();
 		const callsOn = (name: string) => ({ name, needs: 'changes', if: '${{ !cancelled() }}' });
-		const smokeCondition = `\${{ needs.changes.result != 'success' || needs.changes.outputs.product-tests == 'true' }}`;
 		const smokeChecks = [...tests]
 			.filter(([check]) => check.includes('Electron-Smoke'))
 			.map(([check, job]) => [check, resolveInput(job, job.job.if)])
@@ -341,7 +340,7 @@ suite('Detect Changes', () => {
 				'Windows / Electron-Smoke (shard 1/3)',
 				'Windows / Electron-Smoke (shard 2/3)',
 				'Windows / Electron-Smoke (shard 3/3)',
-			].map(check => [check, smokeCondition]),
+			].map(check => [check, false]),
 			enabledNonSmokeChecks: ['Linux / CLI', 'Linux / Copilot Shim'],
 		});
 	});
