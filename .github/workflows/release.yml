@@ -4,6 +4,7 @@ name: Build & Release
 # - 手动触发（workflow_dispatch）时可指定 tag，默认按 package.json 版本生成 v<version>
 # - 推送 v* tag 时自动触发
 # - 两种方式默认都创建「草稿(draft)」发布，确认无误后在 GitHub 上点击 Publish release
+# 实际构建逻辑在可复用工作流 build.yml / build-snap.yml 中。
 on:
   workflow_dispatch:
     inputs:
@@ -76,159 +77,50 @@ jobs:
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "Release tag: $TAG (version $VERSION, draft=$DRAFT, prerelease=$PRERELEASE)"
 
-  build:
-    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+  # 三平台各自独立调用同一个可复用工作流，互不阻塞。
+  # 拆成三个 job（而非一个 matrix）是为了让 snap 只等待 Linux，而不是等整组矩阵完成。
+  build-linux:
+    name: Build linux-x64
     needs: meta
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: linux
-            arch: x64
-          - os: windows-2025
-            platform: win32
-            arch: x64
-          - os: macos-26
-            platform: darwin
-            arch: arm64
-    env:
-      VERSION: ${{ needs.meta.outputs.version }}
-      VSCODE_ARCH: ${{ matrix.arch }}
-      VSCODE_QUALITY: stable
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          submodules: recursive
-          fetch-depth: 0
+    uses: ./.github/workflows/build.yml
+    with:
+      os: ubuntu-24.04
+      platform: linux
+      arch: x64
+      version: ${{ needs.meta.outputs.version }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
+  build-windows:
+    name: Build win32-x64
+    needs: meta
+    uses: ./.github/workflows/build.yml
+    with:
+      os: windows-2025
+      platform: win32
+      arch: x64
+      version: ${{ needs.meta.outputs.version }}
 
-      - name: Install build dependencies (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libxkbfile-dev libkrb5-dev fakeroot rpm
+  build-macos:
+    name: Build darwin-arm64
+    needs: meta
+    uses: ./.github/workflows/build.yml
+    with:
+      os: macos-26
+      platform: darwin
+      arch: arm64
+      version: ${{ needs.meta.outputs.version }}
 
-      - name: Install dependencies
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-        run: npm ci
-
-      # core-ci 负责编译源码并生成 out-vscode-min 等打包产物
-      - name: Compile
-        run: npm run gulp core-ci
-
-      # ---------------------------------------------------------------- Linux
-      # 非 -ci 任务会编译内置扩展（含 copilot）并打包；-ci 仅打包，不包含
-      # compileCopilotExtensionBuildTask / compileNonNativeExtensionsBuildTask
-      - name: Package Linux (tar.gz / deb / rpm)
-        if: matrix.platform == 'linux'
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts
-
-          npm run gulp vscode-linux-x64-min
-
-          tar -czf "artifacts/BlockIDE-linux-x64-${VERSION}.tar.gz" \
-            -C "$(dirname "$GITHUB_WORKSPACE")" VSCode-linux-x64
-
-          npm run gulp vscode-linux-x64-prepare-deb
-          npm run gulp vscode-linux-x64-build-deb
-          DEB_PATH="$(find .build/linux/deb -name '*.deb' -print -quit)"
-          cp "$DEB_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.deb"
-
-          npm run gulp vscode-linux-x64-prepare-rpm
-          npm run gulp vscode-linux-x64-build-rpm
-          RPM_PATH="$(find .build/linux/rpm -name '*.rpm' -print -quit)"
-          cp "$RPM_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.rpm"
-
-      - name: Prepare snap
-        if: matrix.platform == 'linux'
-        id: snap-prepare
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run gulp vscode-linux-x64-prepare-snap
-          SNAP_DIR="$(find .build/linux/snap/x64 -maxdepth 1 -mindepth 1 -type d -name 'blockide-*' -print -quit)"
-          echo "dir=$SNAP_DIR" >> "$GITHUB_OUTPUT"
-
-      # 不用 snapcore/action-build：它通过 LXD 起容器，容器内 snapd 因
-      # apparmor profile 不兼容而启动失败（systemctl start snapd 退出 1）。
-      # --destructive-mode 直接在 runner 上构建，不依赖 LXD/multipass。
-      - name: Build snap
-        if: matrix.platform == 'linux'
-        shell: bash
-        env:
-          SNAP_DIR: ${{ steps.snap-prepare.outputs.dir }}
-        run: |
-          set -euo pipefail
-          sudo snap install snapcraft --classic --channel=7.x/stable
-          (cd "$SNAP_DIR" && sudo --preserve-env=VSCODE_ARCH,VSCODE_QUALITY \
-            snapcraft snap --destructive-mode)
-          SNAP_PATH="$(find "$SNAP_DIR" -maxdepth 1 -name '*.snap' -print -quit)"
-          sudo chmod 0644 "$SNAP_PATH"
-          cp "$SNAP_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.snap"
-
-      # -------------------------------------------------------------- Windows
-      - name: Package Windows (exe / zip)
-        if: matrix.platform == 'win32'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
-
-          npm run gulp vscode-win32-x64-min
-          npm run gulp vscode-win32-x64-inno-updater
-          npm run gulp vscode-win32-x64-system-setup
-
-          Copy-Item ".build\win32-x64\system-setup\VSCodeSetup.exe" "artifacts\BlockIDE-win32-x64-$env:VERSION.exe"
-
-          Push-Location (Split-Path $env:GITHUB_WORKSPACE)
-          try {
-            7z.exe a -tzip "$env:GITHUB_WORKSPACE\artifacts\BlockIDE-win32-x64-$env:VERSION.zip" "VSCode-win32-x64"
-          } finally {
-            Pop-Location
-          }
-
-      # ----------------------------------------------------------------- macOS
-      - name: Package macOS (zip)
-        if: matrix.platform == 'darwin'
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts
-          npm run gulp vscode-darwin-arm64-min
-          (cd "$(dirname "$GITHUB_WORKSPACE")" \
-            && zip -Xry "$GITHUB_WORKSPACE/artifacts/BlockIDE-darwin-arm64-${VERSION}.zip" VSCode-darwin-arm64)
-
-      - name: Package macOS (dmg)
-        if: matrix.platform == 'darwin'
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts
-          node build/darwin/create-dmg.ts "$(dirname "$GITHUB_WORKSPACE")" "$GITHUB_WORKSPACE/artifacts"
-          mv "artifacts/VSCode-darwin-arm64.dmg" "artifacts/BlockIDE-darwin-arm64-${VERSION}.dmg"
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ matrix.platform }}-${{ matrix.arch }}
-          path: artifacts/*
-          if-no-files-found: error
-          retention-days: 7
+  # Snap 只依赖 Linux 产物，与 Windows/macOS 构建并行进行
+  snap:
+    name: Snap linux-x64
+    needs: [meta, build-linux]
+    uses: ./.github/workflows/build-snap.yml
+    with:
+      version: ${{ needs.meta.outputs.version }}
+      arch: x64
 
   release:
     name: Create draft release
-    needs: [meta, build]
+    needs: [meta, build-linux, build-windows, build-macos, snap]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -238,6 +130,7 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
+          pattern: release-*
           merge-multiple: true
 
       - name: List release assets

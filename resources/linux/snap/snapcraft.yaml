@@ -6,13 +6,16 @@ description: |
   simplicity of a code editor with what developers need for the core
   edit-build-debug cycle.
 
-architectures:
-  - build-on: amd64
-    run-on: @@ARCHITECTURE@@
+platforms:
+  @@ARCHITECTURE@@:
+    build-on: [amd64]
+    build-for: [@@ARCHITECTURE@@]
 
 grade: stable
 confinement: classic
-base: core20
+# core24 (glibc 2.39) matches the CI runner; core20 (glibc 2.31) cannot host
+# the native modules we build from source (they require GLIBC_2.34/2.38).
+base: core24
 compression: lzo
 
 parts:
@@ -22,23 +25,24 @@ parts:
     build-packages:
       - patchelf
     stage-packages:
+      # Built in destructive mode on the CI runner (Ubuntu noble), so names follow
+      # the noble t64 transition (e.g. libgtk-3-0t64).
       - ca-certificates
-      - libasound2
-      - libatk-bridge2.0-0
-      - libatk1.0-0
-      - libatspi2.0-0
+      - libasound2t64
+      - libatk-bridge2.0-0t64
+      - libatk1.0-0t64
+      - libatspi2.0-0t64
       - libcairo2
       - libcanberra-gtk3-module
-      - libcurl3-gnutls
-      - libcurl3-nss
-      - libcurl4
+      - libcurl3t64-gnutls
+      - libcurl4t64
       - libegl1
       - libdrm2
       - libgbm1
       - libgl1
       - libgles2
-      - libglib2.0-0
-      - libgtk-3-0
+      - libglib2.0-0t64
+      - libgtk-3-0t64
       - libibus-1.0-5
       - libnss3
       - libpango-1.0-0
@@ -62,7 +66,7 @@ parts:
       - -usr/share/man
     override-build: |
       snapcraftctl build
-      patchelf --force-rpath --set-rpath '$ORIGIN/../../lib/x86_64-linux-gnu:$ORIGIN:/snap/core20/current/lib/x86_64-linux-gnu' $SNAPCRAFT_PART_INSTALL/usr/share/@@NAME@@/chrome_crashpad_handler
+      patchelf --force-rpath --set-rpath '$ORIGIN/../../lib/x86_64-linux-gnu:$ORIGIN:/snap/core24/current/lib/x86_64-linux-gnu' $SNAPCRAFT_PART_INSTALL/usr/share/@@NAME@@/chrome_crashpad_handler
       chmod 0755 $SNAPCRAFT_PART_INSTALL/usr/share/@@NAME@@/chrome-sandbox
   cleanup:
     after:
@@ -71,10 +75,10 @@ parts:
     build-packages:
       - patchelf
     build-snaps:
-      - core20
+      - core24
     override-prime: |
       set -eux
-      for snap in "core20"; do
+      for snap in "core24"; do
         cd "/snap/$snap/current" && find . -type f,l -exec rm -f "$SNAPCRAFT_PRIME/{}" \;
       done
       patchelf --print-rpath $SNAPCRAFT_PRIME/usr/share/@@NAME@@/chrome_crashpad_handler
