@@ -165,6 +165,7 @@ jobs:
       # 不用 snapcore/action-build：它通过 LXD 起容器，容器内 snapd 因
       # apparmor profile 不兼容而启动失败（systemctl start snapd 退出 1）。
       # --destructive-mode 直接在 runner 上构建，不依赖 LXD/multipass。
+      # snapcraft 9 才能构建 core24（base 必须与 runner 的 glibc 匹配）。
       - name: Build snap
         if: matrix.platform == 'linux'
         shell: bash
@@ -172,9 +173,9 @@ jobs:
           SNAP_DIR: ${{ steps.snap-prepare.outputs.dir }}
         run: |
           set -euo pipefail
-          sudo snap install snapcraft --classic --channel=7.x/stable
+          sudo snap install snapcraft --classic --channel=stable
           (cd "$SNAP_DIR" && sudo --preserve-env=VSCODE_ARCH,VSCODE_QUALITY \
-            snapcraft snap --destructive-mode)
+            snapcraft pack --destructive-mode)
           SNAP_PATH="$(find "$SNAP_DIR" -maxdepth 1 -name '*.snap' -print -quit)"
           sudo chmod 0644 "$SNAP_PATH"
           cp "$SNAP_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.snap"
