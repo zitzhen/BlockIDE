@@ -22,23 +22,20 @@ parts:
     build-packages:
       - patchelf
     stage-packages:
+      # NOTE: We build this snap in destructive mode on the CI runner (Ubuntu),
+      # so only packages that exist under the runner's release are listed here.
+      # The upstream list also stages libasound2, libatk*, libatspi2.0-0,
+      # libcurl3-*, libcurl4, libglib2.0-0 and libgtk-3-0; those were renamed
+      # (t64 transition) or dropped, and those libraries are provided by the
+      # host instead.
       - ca-certificates
-      - libasound2
-      - libatk-bridge2.0-0
-      - libatk1.0-0
-      - libatspi2.0-0
       - libcairo2
       - libcanberra-gtk3-module
-      - libcurl3-gnutls
-      - libcurl3-nss
-      - libcurl4
       - libegl1
       - libdrm2
       - libgbm1
       - libgl1
       - libgles2
-      - libglib2.0-0
-      - libgtk-3-0
       - libibus-1.0-5
       - libnss3
       - libpango-1.0-0
