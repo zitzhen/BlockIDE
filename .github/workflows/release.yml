@@ -129,13 +129,15 @@ jobs:
         run: npm run gulp core-ci
 
       # ---------------------------------------------------------------- Linux
+      # 非 -ci 任务会编译内置扩展（含 copilot）并打包；-ci 仅打包，不包含
+      # compileCopilotExtensionBuildTask / compileNonNativeExtensionsBuildTask
       - name: Package Linux (tar.gz / deb / rpm)
         if: matrix.platform == 'linux'
         run: |
           set -euo pipefail
           mkdir -p artifacts
 
-          npm run gulp vscode-linux-x64-min-ci
+          npm run gulp vscode-linux-x64-min
 
           tar -czf "artifacts/BlockIDE-linux-x64-${VERSION}.tar.gz" \
             -C "$(dirname "$GITHUB_WORKSPACE")" VSCode-linux-x64
@@ -183,7 +185,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
 
-          npm run gulp vscode-win32-x64-min-ci
+          npm run gulp vscode-win32-x64-min
           npm run gulp vscode-win32-x64-inno-updater
           npm run gulp vscode-win32-x64-system-setup
 
@@ -202,7 +204,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          npm run gulp vscode-darwin-arm64-min-ci
+          npm run gulp vscode-darwin-arm64-min
           (cd "$(dirname "$GITHUB_WORKSPACE")" \
             && zip -Xry "$GITHUB_WORKSPACE/artifacts/BlockIDE-darwin-arm64-${VERSION}.zip" VSCode-darwin-arm64)
 
