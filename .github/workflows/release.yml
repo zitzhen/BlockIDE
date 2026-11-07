@@ -162,20 +162,22 @@ jobs:
           SNAP_DIR="$(find .build/linux/snap/x64 -maxdepth 1 -mindepth 1 -type d -name 'blockide-*' -print -quit)"
           echo "dir=$SNAP_DIR" >> "$GITHUB_OUTPUT"
 
+      # 不用 snapcore/action-build：它通过 LXD 起容器，容器内 snapd 因
+      # apparmor profile 不兼容而启动失败（systemctl start snapd 退出 1）。
+      # --destructive-mode 直接在 runner 上构建，不依赖 LXD/multipass。
       - name: Build snap
         if: matrix.platform == 'linux'
-        id: snapcraft
-        uses: snapcore/action-build@v1
-        with:
-          path: ${{ steps.snap-prepare.outputs.dir }}
-          snapcraft-channel: 7.x/stable
-
-      - name: Collect snap
-        if: matrix.platform == 'linux'
         shell: bash
+        env:
+          SNAP_DIR: ${{ steps.snap-prepare.outputs.dir }}
         run: |
           set -euo pipefail
-          cp "${{ steps.snapcraft.outputs.snap }}" "artifacts/BlockIDE-linux-x64-${VERSION}.snap"
+          sudo snap install snapcraft --classic --channel=7.x/stable
+          (cd "$SNAP_DIR" && sudo --preserve-env=VSCODE_ARCH,VSCODE_QUALITY \
+            snapcraft snap --destructive-mode)
+          SNAP_PATH="$(find "$SNAP_DIR" -maxdepth 1 -name '*.snap' -print -quit)"
+          sudo chmod 0644 "$SNAP_PATH"
+          cp "$SNAP_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.snap"
 
       # -------------------------------------------------------------- Windows
       - name: Package Windows (exe / zip)
