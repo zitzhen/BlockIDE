@@ -1,0 +1,156 @@
+name: Build
+
+# 可复用的单平台构建工作流，由 release.yml 按平台矩阵调用。
+# 每个平台的所有安装包在此完成并上传为 release-<platform>-<arch> 工件。
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: '运行器，如 ubuntu-24.04 / windows-2025 / macos-26'
+        required: true
+        type: string
+      platform:
+        description: '平台标识：linux / win32 / darwin'
+        required: true
+        type: string
+      arch:
+        description: '架构标识：x64 / arm64'
+        required: true
+        type: string
+      version:
+        description: '产品版本（来自 package.json）'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    name: Build ${{ inputs.platform }}-${{ inputs.arch }}
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 180
+    env:
+      VERSION: ${{ inputs.version }}
+      VSCODE_ARCH: ${{ inputs.arch }}
+      VSCODE_QUALITY: stable
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install build dependencies (Linux)
+        if: inputs.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbfile-dev libkrb5-dev fakeroot rpm
+
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci
+
+      # core-ci 负责编译源码并生成 out-vscode-min 等打包产物
+      - name: Compile
+        run: npm run gulp core-ci
+
+      # ---------------------------------------------------------------- Linux
+      # 非 -ci 任务会编译内置扩展（含 copilot）并打包；-ci 仅打包，不包含
+      # compileCopilotExtensionBuildTask / compileNonNativeExtensionsBuildTask
+      - name: Package Linux (tar.gz / deb / rpm)
+        if: inputs.platform == 'linux'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+
+          npm run gulp vscode-linux-x64-min
+
+          tar -czf "artifacts/BlockIDE-linux-x64-${VERSION}.tar.gz" \
+            -C "$(dirname "$GITHUB_WORKSPACE")" VSCode-linux-x64
+
+          npm run gulp vscode-linux-x64-prepare-deb
+          npm run gulp vscode-linux-x64-build-deb
+          DEB_PATH="$(find .build/linux/deb -name '*.deb' -print -quit)"
+          cp "$DEB_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.deb"
+
+          npm run gulp vscode-linux-x64-prepare-rpm
+          npm run gulp vscode-linux-x64-build-rpm
+          RPM_PATH="$(find .build/linux/rpm -name '*.rpm' -print -quit)"
+          cp "$RPM_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.rpm"
+
+      # 生成 snap 工程目录并打成独立工件，供 build-snap.yml 直接使用
+      - name: Prepare snap source (Linux)
+        if: inputs.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run gulp vscode-linux-${VSCODE_ARCH}-prepare-snap
+          SNAP_DIR="$(find ".build/linux/snap/${VSCODE_ARCH}" -maxdepth 1 -mindepth 1 -type d -name 'blockide-*' -print -quit)"
+          tar -czf snap-src.tar.gz -C "$(dirname "$SNAP_DIR")" "$(basename "$SNAP_DIR")"
+
+      # -------------------------------------------------------------- Windows
+      - name: Package Windows (exe / zip)
+        if: inputs.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+
+          npm run gulp vscode-win32-x64-min
+          npm run gulp vscode-win32-x64-inno-updater
+          npm run gulp vscode-win32-x64-system-setup
+
+          Copy-Item ".build\win32-x64\system-setup\VSCodeSetup.exe" "artifacts\BlockIDE-win32-x64-$env:VERSION.exe"
+
+          Push-Location (Split-Path $env:GITHUB_WORKSPACE)
+          try {
+            7z.exe a -tzip "$env:GITHUB_WORKSPACE\artifacts\BlockIDE-win32-x64-$env:VERSION.zip" "VSCode-win32-x64"
+          } finally {
+            Pop-Location
+          }
+
+      # ----------------------------------------------------------------- macOS
+      - name: Package macOS (zip)
+        if: inputs.platform == 'darwin'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          npm run gulp vscode-darwin-arm64-min
+          (cd "$(dirname "$GITHUB_WORKSPACE")" \
+            && zip -Xry "$GITHUB_WORKSPACE/artifacts/BlockIDE-darwin-arm64-${VERSION}.zip" VSCode-darwin-arm64)
+
+      - name: Package macOS (dmg)
+        if: inputs.platform == 'darwin'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          node build/darwin/create-dmg.ts "$(dirname "$GITHUB_WORKSPACE")" "$GITHUB_WORKSPACE/artifacts"
+          mv "artifacts/VSCode-darwin-arm64.dmg" "artifacts/BlockIDE-darwin-arm64-${VERSION}.dmg"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ inputs.platform }}-${{ inputs.arch }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload snap source
+        if: inputs.platform == 'linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: snap-src-linux-${{ inputs.arch }}
+          path: snap-src.tar.gz
+          if-no-files-found: error
+          retention-days: 7
