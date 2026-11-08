@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { suite, test } from 'node:test';
-import { retryOnTransientSignError } from '../../darwin/sign.ts';
+import { normalizeSigningIdentity, retryOnTransientSignError } from '../../darwin/sign.ts';
 
 function codesignError(stderr: string): Error {
 	return new Error(`Command failed: codesign --sign ABC --force --timestamp --options runtime locale.pak\nlocale.pak: ${stderr}`);
@@ -45,5 +45,29 @@ suite('darwin sign', () => {
 	test('gives up after the maximum number of attempts', async () => {
 		const timestampError = codesignError('A timestamp was expected but was not found.');
 		assert.deepStrictEqual(await sign([timestampError, timestampError, timestampError], 3), { attempts: 3, error: 'locale.pak: A timestamp was expected but was not found.' });
+	});
+});
+
+suite('normalize signing identity', () => {
+	test('strips trust diagnostics appended by find-identity', () => {
+		assert.strictEqual(
+			normalizeSigningIdentity('ZIT Studio BlockIDE Code Signing (CSSMERR_TP_NOT_TRUSTED)'),
+			'ZIT Studio BlockIDE Code Signing');
+		assert.strictEqual(
+			normalizeSigningIdentity('ZIT Studio BlockIDE Code Signing (CSSMERR_TP_CERT_EXPIRED)'),
+			'ZIT Studio BlockIDE Code Signing');
+	});
+
+	test('keeps names and hashes that have no diagnostics', () => {
+		assert.strictEqual(
+			normalizeSigningIdentity('ZIT Studio BlockIDE Code Signing'),
+			'ZIT Studio BlockIDE Code Signing');
+		assert.strictEqual(
+			normalizeSigningIdentity('C7D5DE396508C18020A30E6C4E41764B97EA0490'),
+			'C7D5DE396508C18020A30E6C4E41764B97EA0490');
+	});
+
+	test('preserves undefined', () => {
+		assert.strictEqual(normalizeSigningIdentity(undefined), undefined);
 	});
 });

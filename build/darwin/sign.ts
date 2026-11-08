@@ -79,10 +79,20 @@ export async function retryOnTransientSignError<T>(fn: () => Promise<T>, maxAtte
 	}
 }
 
+/**
+ * `security find-identity` appends trust-evaluation diagnostics such as
+ * `(CSSMERR_TP_NOT_TRUSTED)` to an identity's display name. If such a name is
+ * passed to `codesign --sign`, codesign looks for the whole string and fails
+ * with "no identity found", so strip the suffix before signing.
+ */
+export function normalizeSigningIdentity(identity: string | undefined): string | undefined {
+	return identity?.replace(/\s*\(CSSMERR_[A-Z0-9_]+\)\s*$/, '');
+}
+
 async function main(buildDir?: string): Promise<void> {
 	const tempDir = process.env['AGENT_TEMPDIRECTORY'];
 	const arch = process.env['VSCODE_ARCH'];
-	const identity = process.env['CODESIGN_IDENTITY'];
+	const identity = normalizeSigningIdentity(process.env['CODESIGN_IDENTITY']);
 
 	if (!buildDir) {
 		throw new Error('$AGENT_BUILDDIRECTORY not set');

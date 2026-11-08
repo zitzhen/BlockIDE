@@ -289,16 +289,32 @@ jobs:
             exit 1
           fi
 
+          # SIGNATURE_CRT 里可能只有叶子证书，而它的签发者（ZIT Studio Code Signing CA）
+          # 不一定在系统信任库里。先把 PEM 拆成单张证书，便于分别导入和设置信任。
+          CERT_DIR="$RUNNER_TEMP/blockide-certs"
+          rm -rf "$CERT_DIR"
+          mkdir -p "$CERT_DIR"
+          awk -v dir="$CERT_DIR" '/-----BEGIN CERTIFICATE-----/{n++} n > 0 { file = dir "/cert-" n ".pem"; print >> file }' "$CERT"
+          LEAF="$CERT_DIR/cert-1.pem"
+          echo 'Signing certificate:'
+          /usr/bin/openssl x509 -in "$LEAF" -noout -subject -issuer -dates
+          # 过期证书无论怎么设置信任都无法用于签名，提前给出明确错误
+          if ! /usr/bin/openssl x509 -in "$LEAF" -noout -checkend 0 >/dev/null 2>&1; then
+            echo '::error::The certificate in SIGNATURE_CRT has expired; codesign cannot use it.'
+            exit 1
+          fi
+
           KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
           P12_PASSWORD="$(openssl rand -hex 24)"
 
           # 用系统自带的 LibreSSL 导出，默认算法较旧，Security.framework 才能导入。
           # 这里不拼空数组参数，macOS 默认的 bash 3.2 在 set -u 下展开空数组会报错。
+          # 只导出叶子证书；证书链中的其他证书稍后单独导入临时钥匙串。
           if [ -n "${SIGNATURE_KEYS_PASSWORD:-}" ]; then
-            /usr/bin/openssl pkcs12 -export -inkey "$KEY" -in "$CERT" -out "$P12" \
+            /usr/bin/openssl pkcs12 -export -inkey "$KEY" -in "$LEAF" -out "$P12" \
               -passout "pass:$P12_PASSWORD" -passin "pass:$SIGNATURE_KEYS_PASSWORD" -name BlockIDE
           else
-            /usr/bin/openssl pkcs12 -export -inkey "$KEY" -in "$CERT" -out "$P12" \
+            /usr/bin/openssl pkcs12 -export -inkey "$KEY" -in "$LEAF" -out "$P12" \
               -passout "pass:$P12_PASSWORD" -name BlockIDE
           fi
 
@@ -309,21 +325,50 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
 
-          # 自签名证书默认不受信任，find-identity -v 会把未受信任身份全部过滤掉。
-          # 必须注册为系统信任根，身份才会被判定为 valid，codesign 也才能建立完整链。
-          sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$CERT"
+          # SIGNATURE_CRT 若带有中间/根证书，一并导入临时钥匙串，便于系统构建证书链
+          for extra in "$CERT_DIR"/cert-*.pem; do
+            if [ "$extra" != "$LEAF" ]; then
+              security import "$extra" -k "$KEYCHAIN"
+            fi
+          done
 
-          # 自签名证书可能没有代码签名 EKU，先按 codesigning 过滤，取不到就退回全部身份
-          identity="$(security find-identity -v -p codesigning "$KEYCHAIN" | sed -n 's/.*"\(.*\)"/\1/p' | head -1)"
+          # 仅把证书注册成 trustRoot 不足以让它变成可用身份：trustRoot 只对自签名
+          # 证书有效。SIGNATURE_CRT 里的叶子证书由 "ZIT Studio Code Signing CA" 签发，
+          # 而该 CA 不在系统信任库里，macOS 无法构建完整链，身份会被判定为
+          # CSSMERR_TP_NOT_TRUSTED，codesign 也就找不到可签名的身份。
+          # 因此：自签名证书用 trustRoot；由缺失 CA 签发的叶子证书用 trustAsRoot，
+          # 把叶子证书本身固定为信任锚。只信任 codeSign 策略，避免证书被用于 TLS。
+          leaf_issuer="$(/usr/bin/openssl x509 -in "$LEAF" -noout -issuer -nameopt RFC2253)"
+          leaf_subject="$(/usr/bin/openssl x509 -in "$LEAF" -noout -subject -nameopt RFC2253)"
+          if [ "$leaf_issuer" = "$leaf_subject" ]; then
+            trust_type=trustRoot
+          else
+            trust_type=trustAsRoot
+          fi
+          echo "Registering signing certificate as $trust_type for the codeSign policy"
+          sudo security add-trusted-cert -d -r "$trust_type" -p codeSign -k /Library/Keychains/System.keychain "$LEAF"
+
+          # 用证书的 SHA-1 指纹而不是展示名作为身份：find-identity 的展示名可能带
+          # "(CSSMERR_TP_NOT_TRUSTED)" 之类的诊断后缀，按引号截取会把后缀一起写进
+          # CODESIGN_IDENTITY，codesign 于是报 "no identity found"。
+          identity="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -oE '[0-9A-Fa-f]{40}' | head -1 || true)"
           if [ -z "$identity" ]; then
-            identity="$(security find-identity -v "$KEYCHAIN" | sed -n 's/.*"\(.*\)"/\1/p' | head -1)"
+            # 身份尚未被判定为 valid 时 -v 可能什么都不列，退回完整身份列表
+            identity="$(security find-identity -p codesigning "$KEYCHAIN" | grep -oE '[0-9A-Fa-f]{40}' | head -1 || true)"
           fi
           if [ -z "$identity" ]; then
-            security find-identity -v "$KEYCHAIN" || true
+            security find-identity -p codesigning "$KEYCHAIN" || true
             echo 'No code signing identity found in the temporary keychain'
             exit 1
           fi
-          echo "Signing identity: $identity"
+
+          valid_line="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "$identity" || true)"
+          if [ -z "$valid_line" ] || printf '%s\n' "$valid_line" | grep -q 'CSSMERR'; then
+            echo "::warning::Signing identity $identity is still not trusted; codesign may refuse it."
+            echo "::warning::Make SIGNATURE_CRT contain the full certificate chain (leaf + issuing CA) or trust the issuing CA."
+            security find-identity -p codesigning "$KEYCHAIN" || true
+          fi
+          echo "Signing identity: $identity (trust type: $trust_type)"
 
           {
             echo "CODESIGN_IDENTITY=$identity"
