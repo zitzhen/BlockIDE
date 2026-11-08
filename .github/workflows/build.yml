@@ -3,14 +3,16 @@ name: Build
 # 可复用的单平台构建工作流，由 release.yml 按平台矩阵调用。
 # 每个平台的所有安装包在此完成并上传为 release-<platform>-<arch> 工件。
 #
-# 签名：私钥放在秘密变量 SIGNATURE_KEYS，证书放在可见变量 SIGNATURE_CRT（vars），
-# 两者均为 PEM，Windows/macOS 共用同一张证书。调用方通过 secrets: inherit 传入私钥，
-# vars 上下文在可复用工作流中天然可用。构建时会临时合成 PFX（Windows）和 P12（macOS），
-# 对 exe / msi / msix 以及 app / dmg 做本地签名；未设置时跳过所有签名步骤。
-# macOS 的 SIGNATURE_CRT 建议是完整证书链（叶子证书在前，逐级签发 CA 在后，最后一张
-# 为自签名根）：codesign 需要自己构建到自签名根的链，只给 CA 签发的叶子证书会因缺链而
-# 报 errSecInternalComponent。若只给了叶子证书，macOS 步骤会用同一把私钥临时生成一张
-# 自签名证书完成签名（每次构建都不同），补上 CA 证书后会自动改回用你提供的链。
+# 签名：私钥放在秘密变量 SIGNATURE_KEYS。macOS 的证书来源按优先级：
+#   1) secrets.CRT 或 vars.CRT —— 完整证书链（叶子 + 逐级签发 CA，最后是自签名根）
+#   2) vars.SIGNATURE_CRT      —— 旧的单张证书变量
+# Windows 仍使用 vars.SIGNATURE_CRT（只需叶子证书）。两者均为 PEM。构建时会临时合成
+# PFX（Windows）和 P12（macOS），对 exe / msi / msix 以及 app / dmg 做本地签名；
+# 未设置时跳过所有签名步骤。
+# macOS 的证书建议用完整链：codesign 需要自己构建到自签名根的链，只给 CA 签发的叶子
+# 证书会因缺链而报 errSecInternalComponent。若只给了叶子证书，macOS 步骤会用同一把
+# 私钥临时生成一张自签名证书完成签名（每次构建都不同）。
+# macOS 会按公钥自动识别叶子证书并重排证书顺序，叶子证书在前/在后都能用。
 # 可选 SIGNATURE_KEYS_PASSWORD：私钥若带口令，用它解密。
 on:
   workflow_call:
@@ -272,13 +274,14 @@ jobs:
         if: inputs.platform == 'darwin' && env.HAS_SIGNING_KEYS == 'true'
         env:
           SIGNING_KEY: ${{ secrets.SIGNATURE_KEYS }}
-          SIGNING_CRT: ${{ vars.SIGNATURE_CRT }}
+          # 优先用 CRT（完整证书链，secret 或 variable 均可），没设置时回退到旧的单证书变量
+          SIGNING_CRT: ${{ secrets.CRT || vars.CRT || vars.SIGNATURE_CRT }}
           SIGNATURE_KEYS_PASSWORD: ${{ secrets.SIGNATURE_KEYS_PASSWORD }}
         run: |
           set -euo pipefail
 
           if [ -z "${SIGNING_CRT:-}" ]; then
-            echo 'SIGNATURE_CRT variable is not set; it must contain the PEM certificate'
+            echo 'No signing certificate found: set secrets.CRT (or vars.CRT / vars.SIGNATURE_CRT) to the PEM chain.'
             exit 1
           fi
 
@@ -286,32 +289,66 @@ jobs:
           CERT="$RUNNER_TEMP/blockide-signing.crt"
           P12="$RUNNER_TEMP/blockide-signing.p12"
           KEYCHAIN="$RUNNER_TEMP/buildagent.keychain"
-          printf '%s\n' "$SIGNING_KEY" > "$KEY"
-          printf '%s\n' "$SIGNING_CRT" > "$CERT"
-          if ! grep -q 'BEGIN CERTIFICATE' "$CERT"; then
-            echo 'SIGNATURE_CRT does not contain a BEGIN CERTIFICATE block'
-            exit 1
-          fi
+          # 统一去掉 CRLF，避免从 Windows 粘贴进来的换行影响 PEM 解析
+          printf '%s\n' "$SIGNING_KEY" | tr -d '\r' > "$KEY"
+          printf '%s\n' "$SIGNING_CRT" | tr -d '\r' > "$CERT"
 
-          # SIGNATURE_CRT 必须是完整证书链或自签名证书：
-          #   - 完整链：叶子证书在前，逐级签发 CA 在后，最后一张是自签名根；
-          #   - 自签名证书：只有一张，且 issuer == subject。
-          # 只给叶子证书不够：codesign 必须自己构建出到自签名根的链，缺失签发 CA 时
-          # 会报 "unable to build chain to self-signed root" + errSecInternalComponent；
-          # 而把叶子证书设成 trustAsRoot 会让链在叶子处截断，codesign 同样拒绝签名。
+          # 按证书块拆分 PEM：即使 secret 里混入了私钥，也只会取证书部分
           CERT_DIR="$RUNNER_TEMP/blockide-certs"
           rm -rf "$CERT_DIR"
           mkdir -p "$CERT_DIR"
-          awk -v dir="$CERT_DIR" '/-----BEGIN CERTIFICATE-----/{n++} n > 0 { file = dir "/cert-" n ".pem"; print >> file }' "$CERT"
-          CERT_COUNT="$(ls "$CERT_DIR"/cert-*.pem | wc -l | tr -d ' ')"
-          LEAF="$CERT_DIR/cert-1.pem"
+          awk -v dir="$CERT_DIR" '
+            /-----BEGIN CERTIFICATE-----/ { n++; file = dir "/cert-" n ".pem"; capture = 1 }
+            capture { print >> file }
+            /-----END CERTIFICATE-----/ { capture = 0 }
+          ' "$CERT"
+          CERT_COUNT="$(ls -1 "$CERT_DIR" | wc -l | tr -d ' ')"
+          if [ "$CERT_COUNT" -lt 1 ]; then
+            echo '::error::The signing certificate contains no BEGIN CERTIFICATE block.'
+            exit 1
+          fi
+
+          # 用公钥匹配找出真正与 SIGNATURE_KEYS 配对的叶子证书，并把链首调整为它，
+          # 这样证书在 CRT 里的先后顺序（叶子在前 / CA 在前）都不影响结果。
+          if [ -n "${SIGNATURE_KEYS_PASSWORD:-}" ]; then
+            KEY_PUB="$(/usr/bin/openssl pkey -in "$KEY" -passin "pass:$SIGNATURE_KEYS_PASSWORD" -pubout)"
+          else
+            KEY_PUB="$(/usr/bin/openssl pkey -in "$KEY" -pubout)"
+          fi
+          LEAF=""
+          for cert in "$CERT_DIR"/cert-*.pem; do
+            if [ "$(/usr/bin/openssl x509 -in "$cert" -noout -pubkey)" = "$KEY_PUB" ]; then
+              LEAF="$cert"
+              break
+            fi
+          done
+          if [ -z "$LEAF" ]; then
+            echo '::error::None of the certificates matches SIGNATURE_KEYS (public key mismatch).'
+            exit 1
+          fi
+          if [ "$LEAF" != "$CERT_DIR/cert-1.pem" ]; then
+            echo '::notice::Leaf certificate was not first in the PEM; reordering the chain leaf-first.'
+            CHAIN_DIR="$RUNNER_TEMP/blockide-chain"
+            rm -rf "$CHAIN_DIR"
+            mkdir -p "$CHAIN_DIR"
+            cp "$LEAF" "$CHAIN_DIR/cert-1.pem"
+            index=1
+            for cert in "$CERT_DIR"/cert-*.pem; do
+              if [ "$cert" != "$LEAF" ]; then
+                index=$((index + 1))
+                cp "$cert" "$CHAIN_DIR/cert-$index.pem"
+              fi
+            done
+            CERT_DIR="$CHAIN_DIR"
+            LEAF="$CERT_DIR/cert-1.pem"
+          fi
           ROOT="$CERT_DIR/cert-$CERT_COUNT.pem"
 
-          echo "SIGNATURE_CRT contains $CERT_COUNT certificate(s); signing certificate:"
+          echo "Signing PEM contains $CERT_COUNT certificate(s); leaf certificate:"
           /usr/bin/openssl x509 -in "$LEAF" -noout -subject -issuer -dates
           # 过期证书无论怎么设置信任都无法用于签名，提前给出明确错误
           if ! /usr/bin/openssl x509 -in "$LEAF" -noout -checkend 0 >/dev/null 2>&1; then
-            echo '::error::The certificate in SIGNATURE_CRT has expired; codesign cannot use it.'
+            echo '::error::The signing certificate has expired; codesign cannot use it.'
             exit 1
           fi
 
@@ -338,14 +375,14 @@ jobs:
             TRUST_CERT="$ROOT"
             echo "Using the provided certificate chain (root: $ROOT)"
           else
-            # SIGNATURE_CRT 是 CA 签发的叶子证书，但缺签发它的 CA，codesign 无法
+            # 证书是 CA 签发的叶子证书，但缺签发它的 CA，codesign 无法
             # 构建到自签名根的链。这里用同一把私钥就地补一张自签名证书，
             # 保留原证书的 subject（CN/O/OU），让 CI 无需人工改变量也能签名。
             # 代价：每次构建生成的证书不同（序列号/有效期不同）。如果想固定证书，
-            # 把签发 CA 的证书补进 SIGNATURE_CRT 即可，工作流会自动改回用你的链。
-            echo "::warning::SIGNATURE_CRT does not end in a self-signed root (last issuer: $root_issuer)."
+            # 把签发 CA 的证书补进 secrets.CRT 即可，工作流会自动改回用你的链。
+            echo "::warning::The signing certificate does not end in a self-signed root (last issuer: $root_issuer)."
             echo '::warning::Generating a self-signed certificate from SIGNATURE_KEYS for this build.'
-            echo '::warning::Add the issuing CA certificate to SIGNATURE_CRT to sign with your own stable certificate chain.'
+            echo '::warning::Add the issuing CA certificate to secrets.CRT to sign with your own stable certificate chain.'
             SIGN_CERT="$RUNNER_TEMP/blockide-signing-selfsigned.crt"
             TRUST_CERT="$SIGN_CERT"
             EXT_FILE="$RUNNER_TEMP/blockide-signing-selfsigned.ext"
