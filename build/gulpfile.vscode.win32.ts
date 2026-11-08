@@ -14,6 +14,8 @@ import product from '../product.json' with { type: 'json' };
 import { getVersion } from './lib/getVersion.ts';
 import * as task from './lib/gulp/task.ts';
 import * as util from './lib/util.ts';
+import { prepareManagedPayload } from './win32/managedPayload.ts';
+import { generateWixSource, normalizeMsiVersion } from './win32/msi/generateWix.ts';
 
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
@@ -162,3 +164,183 @@ function updateIcon(executablePath: string): task.CallbackTask {
 
 task.task(task.define('vscode-win32-x64-inno-updater', task.series(copyInnoUpdater('x64'), updateIcon(path.join(buildPath('x64'), 'tools', 'inno_updater.exe')))));
 task.task(task.define('vscode-win32-arm64-inno-updater', task.series(copyInnoUpdater('arm64'), updateIcon(path.join(buildPath('arm64'), 'tools', 'inno_updater.exe')))));
+
+const managedPackageDir = (arch: string, kind: 'msi' | 'msix') => path.join(repoPath, '.build', `win32-${arch}`, kind);
+const iconPath = path.join(repoPath, 'resources', 'win32', 'code.ico');
+const aboutUrl = 'https://github.com/zitzhen/BlockIDE';
+
+function getVersionedResourcesFolder(): string {
+	const useVersionedUpdate = (product as typeof product & { win32VersionedUpdate?: boolean }).win32VersionedUpdate;
+	return useVersionedUpdate ? commit!.substring(0, 10) : '';
+}
+
+function spawnTool(executable: string, args: string[], cwd: string): Promise<void> {
+	return new Promise((resolve, reject) => {
+		cp.spawn(executable, args, { cwd, stdio: ['ignore', 'inherit', 'inherit'] })
+			.on('error', reject)
+			.on('exit', code => code === 0 ? resolve() : reject(new Error(`${path.basename(executable)} exited with code: ${code}`)));
+	});
+}
+
+function findWixTool(name: string): string {
+	const directories = [
+		process.env['WIX_BIN'],
+		'C:\\Program Files (x86)\\WiX Toolset v3.14\\bin',
+		'C:\\Program Files (x86)\\WiX Toolset v3.11\\bin'
+	].filter((directory): directory is string => !!directory);
+
+	for (const directory of directories) {
+		const tool = path.join(directory, name);
+		if (fs.existsSync(tool)) {
+			return tool;
+		}
+	}
+
+	return name;
+}
+
+function findWindowsSdkTool(name: string, arch: string, overrideEnvironmentVariable: string): string {
+	const override = process.env[overrideEnvironmentVariable];
+	if (override) {
+		return override;
+	}
+
+	const sdkBinRoot = 'C:\\Program Files (x86)\\Windows Kits\\10\\bin';
+	if (fs.existsSync(sdkBinRoot)) {
+		const versions = fs.readdirSync(sdkBinRoot)
+			.filter(version => /^\d+\.\d+\.\d+\.\d+$/.test(version))
+			.sort()
+			.reverse();
+
+		for (const version of versions) {
+			const tool = path.join(sdkBinRoot, version, arch, name);
+			if (fs.existsSync(tool)) {
+				return tool;
+			}
+		}
+	}
+
+	return name;
+}
+
+function normalizeMsixVersion(version: string): string {
+	const parts = version.split('-')[0].split('.').filter(part => /^\d+$/.test(part)).slice(0, 4);
+
+	while (parts.length < 4) {
+		parts.push('0');
+	}
+
+	return parts.map(part => Math.min(parseInt(part, 10), 65535)).join('.');
+}
+
+function buildWin32Msi(arch: string): task.CallbackTask {
+	return cb => {
+		void (async () => {
+			if (process.platform !== 'win32') {
+				throw new Error('MSI packaging is only supported on Windows');
+			}
+
+			const sourcePath = buildPath(arch);
+			if (!fs.existsSync(sourcePath)) {
+				throw new Error(`Missing built client: ${sourcePath}`);
+			}
+
+			const outputPath = managedPackageDir(arch, 'msi');
+			const payloadPath = path.join(outputPath, 'payload');
+			fs.mkdirSync(outputPath, { recursive: true });
+			prepareManagedPayload(sourcePath, payloadPath, getVersionedResourcesFolder());
+
+			const wxsPath = path.join(outputPath, 'Product.generated.wxs');
+			fs.writeFileSync(wxsPath, generateWixSource({
+				sourceDir: payloadPath,
+				productName: product.nameLong,
+				manufacturer: product.nameLong,
+				version: pkg.version,
+				executableName: `${product.nameShort}.exe`,
+				iconPath,
+				aboutUrl
+			}), 'utf8');
+
+			const wixArch = arch === 'arm64' ? 'arm64' : arch === 'x64' ? 'x64' : undefined;
+			if (!wixArch) {
+				throw new Error(`Unsupported architecture: ${arch}`);
+			}
+
+			const wixobjPath = path.join(outputPath, 'Product.wixobj');
+			await spawnTool(findWixTool('candle.exe'), [
+				wxsPath,
+				'-arch', wixArch,
+				`-dSourceDir=${payloadPath}`,
+				`-dIconPath=${iconPath}`,
+				'-o', wixobjPath
+			], outputPath);
+
+			const msiPath = path.join(outputPath, `${product.nameShort}-${normalizeMsiVersion(pkg.version)}-${arch}.msi`);
+			await spawnTool(findWixTool('light.exe'), [
+				wixobjPath,
+				'-o', msiPath
+			], outputPath);
+		})().then(() => cb?.(), err => cb?.(err instanceof Error ? err : new Error(String(err))));
+	};
+}
+
+task.task(task.define('vscode-win32-x64-msi', buildWin32Msi('x64')));
+task.task(task.define('vscode-win32-arm64-msi', buildWin32Msi('arm64')));
+
+function buildWin32Msix(arch: string): task.CallbackTask {
+	return cb => {
+		void (async () => {
+			if (process.platform !== 'win32') {
+				throw new Error('MSIX packaging is only supported on Windows');
+			}
+
+			const sourcePath = buildPath(arch);
+			if (!fs.existsSync(sourcePath)) {
+				throw new Error(`Missing built client: ${sourcePath}`);
+			}
+
+			const outputPath = managedPackageDir(arch, 'msix');
+			const payloadPath = path.join(outputPath, 'payload');
+			fs.mkdirSync(outputPath, { recursive: true });
+			prepareManagedPayload(sourcePath, payloadPath, getVersionedResourcesFolder());
+
+			const manifestTemplatePath = path.join(import.meta.dirname, 'win32', 'msix', 'AppxManifest.template.xml');
+			const replacements: Record<string, string> = {
+				IDENTITY: process.env['BLOCKIDE_MSIX_IDENTITY'] || product.win32AppUserModelId,
+				PUBLISHER: process.env['BLOCKIDE_MSIX_PUBLISHER'] || 'CN=BlockIDE',
+				PUBLISHER_DISPLAY_NAME: process.env['BLOCKIDE_MSIX_PUBLISHER_DISPLAY_NAME'] || product.nameLong,
+				VERSION: normalizeMsixVersion(pkg.version),
+				ARCH: arch,
+				DISPLAY_NAME: product.nameLong,
+				DESCRIPTION: product.nameLong,
+				EXECUTABLE: `${product.nameShort}.exe`
+			};
+			const manifest = fs.readFileSync(manifestTemplatePath, 'utf8')
+				.replace(/@@([A-Z0-9_]+)@@/g, (match, key: string) => {
+					const replacement = replacements[key];
+					if (replacement === undefined) {
+						throw new Error(`Missing MSIX manifest placeholder: ${match}`);
+					}
+					return replacement;
+				});
+			fs.writeFileSync(path.join(payloadPath, 'AppxManifest.xml'), manifest, 'utf8');
+
+			const assetsPath = path.join(payloadPath, 'Assets');
+			fs.mkdirSync(assetsPath, { recursive: true });
+			fs.copyFileSync(path.join(repoPath, 'resources', 'win32', 'code_150x150.png'), path.join(assetsPath, 'Square150x150Logo.png'));
+			fs.copyFileSync(path.join(repoPath, 'resources', 'win32', 'code_70x70.png'), path.join(assetsPath, 'Square44x44Logo.png'));
+			fs.copyFileSync(path.join(repoPath, 'resources', 'win32', 'code_150x150.png'), path.join(assetsPath, 'StoreLogo.png'));
+
+			const msixPath = path.join(outputPath, `${product.nameShort}-${normalizeMsixVersion(pkg.version)}-${arch}.msix`);
+			await spawnTool(findWindowsSdkTool('makeappx.exe', arch, 'MAKEAPPX'), [
+				'pack',
+				'/d', payloadPath,
+				'/p', msixPath,
+				'/o'
+			], outputPath);
+		})().then(() => cb?.(), err => cb?.(err instanceof Error ? err : new Error(String(err))));
+	};
+}
+
+task.task(task.define('vscode-win32-x64-msix', buildWin32Msix('x64')));
+task.task(task.define('vscode-win32-arm64-msix', buildWin32Msix('arm64')));
