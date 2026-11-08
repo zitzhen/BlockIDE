@@ -168,10 +168,14 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
-          $sdk = Get-ChildItem $sdkRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $sdk) { throw 'Windows SDK not found' }
-          $signtool = Join-Path $sdk.FullName 'x64\signtool.exe'
-          if (-not (Test-Path $signtool)) { throw "signtool not found at $signtool" }
+          # bin 下同时存在 x86/x64 等目录，只按版本号目录排序，避免选中 x86 拼出错路径
+          $signtool = Get-ChildItem $sdkRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName 'x64\signtool.exe' } |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found under $sdkRoot" }
 
           $clientDir = Join-Path (Split-Path $env:GITHUB_WORKSPACE) 'VSCode-win32-x64'
           $targets = Get-ChildItem $clientDir -Filter *.exe -File
@@ -202,7 +206,8 @@ jobs:
           $env:PATH = "$env:WIX_BIN;$env:PATH"
 
           $sdkDirectory = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Directory -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending | Select-Object -First 1
+            Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
           if ($sdkDirectory) {
             $env:PATH = "$(Join-Path $sdkDirectory.FullName 'x64');$env:PATH"
           }
@@ -229,10 +234,14 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
-          $sdk = Get-ChildItem $sdkRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $sdk) { throw 'Windows SDK not found' }
-          $signtool = Join-Path $sdk.FullName 'x64\signtool.exe'
-          if (-not (Test-Path $signtool)) { throw "signtool not found at $signtool" }
+          # bin 下同时存在 x86/x64 等目录，只按版本号目录排序，避免选中 x86 拼出错路径
+          $signtool = Get-ChildItem $sdkRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName 'x64\signtool.exe' } |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found under $sdkRoot" }
 
           $targets = Get-ChildItem artifacts -File | Where-Object { $_.Extension -in '.exe', '.msi', '.msix' }
           if (-not $targets) { throw 'No installer artifacts found to sign' }
