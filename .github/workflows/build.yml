@@ -100,18 +100,40 @@ jobs:
           tar -czf snap-src.tar.gz -C "$(dirname "$SNAP_DIR")" "$(basename "$SNAP_DIR")"
 
       # -------------------------------------------------------------- Windows
-      - name: Package Windows (exe / zip)
+      - name: Package Windows (exe / zip / msi / msix)
         if: inputs.platform == 'win32'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
 
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset --no-progress -y
+          }
+
+          $wixDirectory = Get-ChildItem 'C:\Program Files (x86)' -Directory -Filter 'WiX Toolset v3*' -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $wixDirectory) {
+            throw 'WiX Toolset v3 is required to build the MSI'
+          }
+          $env:WIX_BIN = Join-Path $wixDirectory.FullName 'bin'
+          $env:PATH = "$env:WIX_BIN;$env:PATH"
+
+          $sdkDirectory = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if ($sdkDirectory) {
+            $env:PATH = "$(Join-Path $sdkDirectory.FullName 'x64');$env:PATH"
+          }
+
           npm run gulp vscode-win32-x64-min
           npm run gulp vscode-win32-x64-inno-updater
           npm run gulp vscode-win32-x64-system-setup
+          npm run gulp vscode-win32-x64-msi
+          npm run gulp vscode-win32-x64-msix
 
           Copy-Item ".build\win32-x64\system-setup\VSCodeSetup.exe" "artifacts\BlockIDE-win32-x64-$env:VERSION.exe"
+          Copy-Item ".build\win32-x64\msi\BlockIDE-*-x64.msi" "artifacts\BlockIDE-win32-x64-$env:VERSION.msi"
+          Copy-Item ".build\win32-x64\msix\BlockIDE-*-x64.msix" "artifacts\BlockIDE-win32-x64-$env:VERSION.msix"
 
           Push-Location (Split-Path $env:GITHUB_WORKSPACE)
           try {
