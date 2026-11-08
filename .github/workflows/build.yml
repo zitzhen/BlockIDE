@@ -3,11 +3,11 @@ name: Build
 # 可复用的单平台构建工作流，由 release.yml 按平台矩阵调用。
 # 每个平台的所有安装包在此完成并上传为 release-<platform>-<arch> 工件。
 #
-# 签名：调用方通过 secrets: inherit 传入 SIGNATURE_KEYS（openssl 生成的 PEM，
-# 内含私钥与证书，Windows/macOS 共用同一张证书）。设置后会在构建机上临时转换为
-# PFX（Windows）和 P12（macOS），对 exe / msi / msix 以及 app / dmg 做本地签名；
-# 未设置时跳过所有签名步骤，产物保持未签名。
-# 可选 SIGNATURE_KEYS_PASSWORD：PEM 中私钥若带口令，用它解密。
+# 签名：私钥放在秘密变量 SIGNATURE_KEYS，证书放在可见变量 SIGNATURE_CRT（vars），
+# 两者均为 PEM，Windows/macOS 共用同一张证书。调用方通过 secrets: inherit 传入私钥，
+# vars 上下文在可复用工作流中天然可用。构建时会临时合成 PFX（Windows）和 P12（macOS），
+# 对 exe / msi / msix 以及 app / dmg 做本地签名；未设置时跳过所有签名步骤。
+# 可选 SIGNATURE_KEYS_PASSWORD：私钥若带口令，用它解密。
 on:
   workflow_call:
     inputs:
@@ -116,36 +116,45 @@ jobs:
           npm run gulp vscode-win32-x64-min
           npm run gulp vscode-win32-x64-inno-updater
 
-      # openssl PEM -> PFX；证书 Subject 同时用作 MSIX 的 Publisher，否则 MSIX 签名会失败
+      # 私钥来自 secrets.SIGNATURE_KEYS，证书来自 vars.SIGNATURE_CRT，分别落盘后再合成 PFX；
+      # 证书 Subject 同时用作 MSIX 的 Publisher，否则 MSIX 签名会失败
       - name: Prepare signing certificate (Windows)
         if: inputs.platform == 'win32' && env.HAS_SIGNING_KEYS == 'true'
         shell: pwsh
         env:
-          SIGNATURE_KEYS: ${{ secrets.SIGNATURE_KEYS }}
+          SIGNING_KEY: ${{ secrets.SIGNATURE_KEYS }}
+          SIGNING_CRT: ${{ vars.SIGNATURE_CRT }}
           SIGNATURE_KEYS_PASSWORD: ${{ secrets.SIGNATURE_KEYS_PASSWORD }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $pemPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.pem'
-          [System.IO.File]::WriteAllText($pemPath, $env:SIGNATURE_KEYS)
+          if (-not $env:SIGNING_CRT) { throw 'SIGNATURE_CRT variable is not set; it must contain the PEM certificate' }
+
+          $keyPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.key'
+          $certPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.crt'
+          [System.IO.File]::WriteAllText($keyPath, $env:SIGNING_KEY)
+          [System.IO.File]::WriteAllText($certPath, $env:SIGNING_CRT)
+          if (-not (Select-String -Path $certPath -Pattern 'BEGIN CERTIFICATE' -Quiet)) {
+            throw 'SIGNATURE_CRT does not contain a BEGIN CERTIFICATE block'
+          }
 
           $openssl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
           if (-not $openssl) {
             $gitOpenSsl = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe'
             if (Test-Path $gitOpenSsl) { $openssl = $gitOpenSsl }
           }
-          if (-not $openssl) { throw 'openssl.exe not found, cannot convert SIGNATURE_KEYS PEM to PFX' }
+          if (-not $openssl) { throw 'openssl.exe not found, cannot build the PFX from SIGNATURE_KEYS/SIGNATURE_CRT' }
 
           $password = [System.Guid]::NewGuid().ToString('N')
           $pfxPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.pfx'
           $keyArgs = @()
           if ($env:SIGNATURE_KEYS_PASSWORD) { $keyArgs = @('-passin', "pass:$env:SIGNATURE_KEYS_PASSWORD") }
 
-          & $openssl pkcs12 -export -inkey $pemPath -in $pemPath -out $pfxPath -passout "pass:$password" -name BlockIDE @keyArgs
+          & $openssl pkcs12 -export -inkey $keyPath -in $certPath -out $pfxPath -passout "pass:$password" -name BlockIDE @keyArgs
           if ($LASTEXITCODE -ne 0) { throw "openssl pkcs12 exited with code $LASTEXITCODE" }
 
-          $subject = ((& $openssl x509 -in $pemPath -noout -subject -nameopt RFC2253) -join '') -replace '^subject\s*=\s*', ''
-          if (-not $subject) { throw 'Failed to read certificate subject from SIGNATURE_KEYS' }
+          $subject = ((& $openssl x509 -in $certPath -noout -subject -nameopt RFC2253) -join '') -replace '^subject\s*=\s*', ''
+          if (-not $subject) { throw 'Failed to read certificate subject from SIGNATURE_CRT' }
 
           "SIGNING_PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "SIGNING_PFX_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -244,15 +253,27 @@ jobs:
       - name: Prepare signing certificate (macOS)
         if: inputs.platform == 'darwin' && env.HAS_SIGNING_KEYS == 'true'
         env:
-          SIGNATURE_KEYS: ${{ secrets.SIGNATURE_KEYS }}
+          SIGNING_KEY: ${{ secrets.SIGNATURE_KEYS }}
+          SIGNING_CRT: ${{ vars.SIGNATURE_CRT }}
           SIGNATURE_KEYS_PASSWORD: ${{ secrets.SIGNATURE_KEYS_PASSWORD }}
         run: |
           set -euo pipefail
 
-          PEM="$RUNNER_TEMP/blockide-signing.pem"
+          if [ -z "${SIGNING_CRT:-}" ]; then
+            echo 'SIGNATURE_CRT variable is not set; it must contain the PEM certificate'
+            exit 1
+          fi
+
+          KEY="$RUNNER_TEMP/blockide-signing.key"
+          CERT="$RUNNER_TEMP/blockide-signing.crt"
           P12="$RUNNER_TEMP/blockide-signing.p12"
           KEYCHAIN="$RUNNER_TEMP/buildagent.keychain"
-          printf '%s' "$SIGNATURE_KEYS" > "$PEM"
+          printf '%s\n' "$SIGNING_KEY" > "$KEY"
+          printf '%s\n' "$SIGNING_CRT" > "$CERT"
+          if ! grep -q 'BEGIN CERTIFICATE' "$CERT"; then
+            echo 'SIGNATURE_CRT does not contain a BEGIN CERTIFICATE block'
+            exit 1
+          fi
 
           KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
           P12_PASSWORD="$(openssl rand -hex 24)"
@@ -260,10 +281,10 @@ jobs:
           # 用系统自带的 LibreSSL 导出，默认算法较旧，Security.framework 才能导入。
           # 这里不拼空数组参数，macOS 默认的 bash 3.2 在 set -u 下展开空数组会报错。
           if [ -n "${SIGNATURE_KEYS_PASSWORD:-}" ]; then
-            /usr/bin/openssl pkcs12 -export -inkey "$PEM" -in "$PEM" -out "$P12" \
+            /usr/bin/openssl pkcs12 -export -inkey "$KEY" -in "$CERT" -out "$P12" \
               -passout "pass:$P12_PASSWORD" -passin "pass:$SIGNATURE_KEYS_PASSWORD" -name BlockIDE
           else
-            /usr/bin/openssl pkcs12 -export -inkey "$PEM" -in "$PEM" -out "$P12" \
+            /usr/bin/openssl pkcs12 -export -inkey "$KEY" -in "$CERT" -out "$P12" \
               -passout "pass:$P12_PASSWORD" -name BlockIDE
           fi
 
