@@ -2,6 +2,12 @@ name: Build
 
 # 可复用的单平台构建工作流，由 release.yml 按平台矩阵调用。
 # 每个平台的所有安装包在此完成并上传为 release-<platform>-<arch> 工件。
+#
+# 签名：调用方通过 secrets: inherit 传入 SIGNATURE_KEYS（openssl 生成的 PEM，
+# 内含私钥与证书，Windows/macOS 共用同一张证书）。设置后会在构建机上临时转换为
+# PFX（Windows）和 P12（macOS），对 exe / msi / msix 以及 app / dmg 做本地签名；
+# 未设置时跳过所有签名步骤，产物保持未签名。
+# 可选 SIGNATURE_KEYS_PASSWORD：PEM 中私钥若带口令，用它解密。
 on:
   workflow_call:
     inputs:
@@ -36,6 +42,7 @@ jobs:
       VSCODE_ARCH: ${{ inputs.arch }}
       VSCODE_QUALITY: stable
       GITHUB_TOKEN: ${{ github.token }}
+      HAS_SIGNING_KEYS: ${{ secrets.SIGNATURE_KEYS != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,6 +107,72 @@ jobs:
           tar -czf snap-src.tar.gz -C "$(dirname "$SNAP_DIR")" "$(basename "$SNAP_DIR")"
 
       # -------------------------------------------------------------- Windows
+      # 先产出客户端，签名后被打进 exe / zip / msi / msix，保证安装后主程序也是已签名的
+      - name: Build Windows client
+        if: inputs.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run gulp vscode-win32-x64-min
+          npm run gulp vscode-win32-x64-inno-updater
+
+      # openssl PEM -> PFX；证书 Subject 同时用作 MSIX 的 Publisher，否则 MSIX 签名会失败
+      - name: Prepare signing certificate (Windows)
+        if: inputs.platform == 'win32' && env.HAS_SIGNING_KEYS == 'true'
+        shell: pwsh
+        env:
+          SIGNATURE_KEYS: ${{ secrets.SIGNATURE_KEYS }}
+          SIGNATURE_KEYS_PASSWORD: ${{ secrets.SIGNATURE_KEYS_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $pemPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.pem'
+          [System.IO.File]::WriteAllText($pemPath, $env:SIGNATURE_KEYS)
+
+          $openssl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
+          if (-not $openssl) {
+            $gitOpenSsl = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe'
+            if (Test-Path $gitOpenSsl) { $openssl = $gitOpenSsl }
+          }
+          if (-not $openssl) { throw 'openssl.exe not found, cannot convert SIGNATURE_KEYS PEM to PFX' }
+
+          $password = [System.Guid]::NewGuid().ToString('N')
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.pfx'
+          $keyArgs = @()
+          if ($env:SIGNATURE_KEYS_PASSWORD) { $keyArgs = @('-passin', "pass:$env:SIGNATURE_KEYS_PASSWORD") }
+
+          & $openssl pkcs12 -export -inkey $pemPath -in $pemPath -out $pfxPath -passout "pass:$password" -name BlockIDE @keyArgs
+          if ($LASTEXITCODE -ne 0) { throw "openssl pkcs12 exited with code $LASTEXITCODE" }
+
+          $subject = ((& $openssl x509 -in $pemPath -noout -subject -nameopt RFC2253) -join '') -replace '^subject\s*=\s*', ''
+          if (-not $subject) { throw 'Failed to read certificate subject from SIGNATURE_KEYS' }
+
+          "SIGNING_PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SIGNING_PFX_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "BLOCKIDE_MSIX_PUBLISHER=$subject" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Signing certificate subject: $subject"
+
+      - name: Sign Windows client
+        if: inputs.platform == 'win32' && env.HAS_SIGNING_KEYS == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
+          $sdk = Get-ChildItem $sdkRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $sdk) { throw 'Windows SDK not found' }
+          $signtool = Join-Path $sdk.FullName 'x64\signtool.exe'
+          if (-not (Test-Path $signtool)) { throw "signtool not found at $signtool" }
+
+          $clientDir = Join-Path (Split-Path $env:GITHUB_WORKSPACE) 'VSCode-win32-x64'
+          $targets = Get-ChildItem $clientDir -Filter *.exe -File
+          if (-not $targets) { throw "No executable found in $clientDir" }
+
+          foreach ($file in $targets) {
+            & $signtool sign /fd sha256 /f $env:SIGNING_PFX_PATH /p $env:SIGNING_PFX_PASSWORD $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($file.Name)" }
+          }
+
       - name: Package Windows (exe / zip / msi / msix)
         if: inputs.platform == 'win32'
         shell: pwsh
@@ -125,8 +198,6 @@ jobs:
             $env:PATH = "$(Join-Path $sdkDirectory.FullName 'x64');$env:PATH"
           }
 
-          npm run gulp vscode-win32-x64-min
-          npm run gulp vscode-win32-x64-inno-updater
           npm run gulp vscode-win32-x64-system-setup
           npm run gulp vscode-win32-x64-msi
           npm run gulp vscode-win32-x64-msix
@@ -142,13 +213,96 @@ jobs:
             Pop-Location
           }
 
+      - name: Sign Windows installers
+        if: inputs.platform == 'win32' && env.HAS_SIGNING_KEYS == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
+          $sdk = Get-ChildItem $sdkRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $sdk) { throw 'Windows SDK not found' }
+          $signtool = Join-Path $sdk.FullName 'x64\signtool.exe'
+          if (-not (Test-Path $signtool)) { throw "signtool not found at $signtool" }
+
+          $targets = Get-ChildItem artifacts -File | Where-Object { $_.Extension -in '.exe', '.msi', '.msix' }
+          if (-not $targets) { throw 'No installer artifacts found to sign' }
+
+          foreach ($file in $targets) {
+            & $signtool sign /fd sha256 /f $env:SIGNING_PFX_PATH /p $env:SIGNING_PFX_PASSWORD $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($file.Name)" }
+          }
+
       # ----------------------------------------------------------------- macOS
+      - name: Build macOS client
+        if: inputs.platform == 'darwin'
+        run: |
+          set -euo pipefail
+          npm run gulp vscode-darwin-arm64-min
+
+      # 临时钥匙串路径必须是 $AGENT_TEMPDIRECTORY/buildagent.keychain，build/darwin/sign.ts 依赖它
+      - name: Prepare signing certificate (macOS)
+        if: inputs.platform == 'darwin' && env.HAS_SIGNING_KEYS == 'true'
+        env:
+          SIGNATURE_KEYS: ${{ secrets.SIGNATURE_KEYS }}
+          SIGNATURE_KEYS_PASSWORD: ${{ secrets.SIGNATURE_KEYS_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          PEM="$RUNNER_TEMP/blockide-signing.pem"
+          P12="$RUNNER_TEMP/blockide-signing.p12"
+          KEYCHAIN="$RUNNER_TEMP/buildagent.keychain"
+          printf '%s' "$SIGNATURE_KEYS" > "$PEM"
+
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          P12_PASSWORD="$(openssl rand -hex 24)"
+
+          # 用系统自带的 LibreSSL 导出，默认算法较旧，Security.framework 才能导入。
+          # 这里不拼空数组参数，macOS 默认的 bash 3.2 在 set -u 下展开空数组会报错。
+          if [ -n "${SIGNATURE_KEYS_PASSWORD:-}" ]; then
+            /usr/bin/openssl pkcs12 -export -inkey "$PEM" -in "$PEM" -out "$P12" \
+              -passout "pass:$P12_PASSWORD" -passin "pass:$SIGNATURE_KEYS_PASSWORD" -name BlockIDE
+          else
+            /usr/bin/openssl pkcs12 -export -inkey "$PEM" -in "$PEM" -out "$P12" \
+              -passout "pass:$P12_PASSWORD" -name BlockIDE
+          fi
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          # 自签名证书可能没有代码签名 EKU，先按 codesigning 过滤，取不到就退回全部身份
+          identity="$(security find-identity -v -p codesigning "$KEYCHAIN" | sed -n 's/.*"\(.*\)"/\1/p' | head -1)"
+          if [ -z "$identity" ]; then
+            identity="$(security find-identity -v "$KEYCHAIN" | sed -n 's/.*"\(.*\)"/\1/p' | head -1)"
+          fi
+          if [ -z "$identity" ]; then
+            security find-identity -v "$KEYCHAIN" || true
+            echo 'No code signing identity found in the temporary keychain'
+            exit 1
+          fi
+          echo "Signing identity: $identity"
+
+          {
+            echo "CODESIGN_IDENTITY=$identity"
+            echo "SIGNING_KEYCHAIN=$KEYCHAIN"
+            echo "AGENT_TEMPDIRECTORY=$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
+
+      - name: Sign macOS app
+        if: inputs.platform == 'darwin' && env.HAS_SIGNING_KEYS == 'true'
+        run: |
+          set -euo pipefail
+          node build/darwin/sign.ts "$(dirname "$GITHUB_WORKSPACE")"
+
       - name: Package macOS (zip)
         if: inputs.platform == 'darwin'
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          npm run gulp vscode-darwin-arm64-min
           (cd "$(dirname "$GITHUB_WORKSPACE")" \
             && zip -Xry "$GITHUB_WORKSPACE/artifacts/BlockIDE-darwin-arm64-${VERSION}.zip" VSCode-darwin-arm64)
 
@@ -159,6 +313,13 @@ jobs:
           mkdir -p artifacts
           node build/darwin/create-dmg.ts "$(dirname "$GITHUB_WORKSPACE")" "$GITHUB_WORKSPACE/artifacts"
           mv "artifacts/VSCode-darwin-arm64.dmg" "artifacts/BlockIDE-darwin-arm64-${VERSION}.dmg"
+
+      - name: Sign macOS dmg
+        if: inputs.platform == 'darwin' && env.HAS_SIGNING_KEYS == 'true'
+        run: |
+          set -euo pipefail
+          dmg="artifacts/BlockIDE-darwin-arm64-${VERSION}.dmg"
+          codesign --force --timestamp=none --sign "$CODESIGN_IDENTITY" --keychain "$SIGNING_KEYCHAIN" "$dmg"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
