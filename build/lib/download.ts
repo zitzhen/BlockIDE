@@ -46,7 +46,8 @@ export async function download(url: string, options: IDownloadOptions = {}): Pro
 			lastError = error instanceof Error ? error : new Error(String(error));
 			if (attempt < attempts) {
 				options.onRetry?.(lastError);
-				await new Promise(resolve => setTimeout(resolve, retryDelay));
+				// 指数退避：1x, 2x, 4x ... 避免连续打同一个源
+				await new Promise(resolve => setTimeout(resolve, retryDelay * 2 ** (attempt - 1)));
 			}
 		}
 	}

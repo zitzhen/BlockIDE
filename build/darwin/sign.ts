@@ -79,10 +79,23 @@ export async function retryOnTransientSignError<T>(fn: () => Promise<T>, maxAtte
 	}
 }
 
+/**
+ * `security find-identity` appends trust-evaluation diagnostics such as
+ * `(CSSMERR_TP_NOT_TRUSTED)` to an identity's display name. If such a name is
+ * passed to `codesign --sign`, codesign looks for the whole string and fails
+ * with "no identity found", so strip the suffix before signing.
+ */
+export function normalizeSigningIdentity(identity: string | undefined): string | undefined {
+	return identity?.replace(/\s*\(CSSMERR_[A-Z0-9_]+\)\s*$/, '');
+}
+
 async function main(buildDir?: string): Promise<void> {
 	const tempDir = process.env['AGENT_TEMPDIRECTORY'];
 	const arch = process.env['VSCODE_ARCH'];
-	const identity = process.env['CODESIGN_IDENTITY'];
+	const identity = normalizeSigningIdentity(process.env['CODESIGN_IDENTITY']);
+	// Apple 的时间戳服务不保证支持非 Apple 签发的身份，使用自签名/私有 CA 证书时
+	// 工作流会传 `none` 显式关闭时间戳；未设置时沿用 osx-sign 的默认行为。
+	const timestamp = process.env['CODESIGN_TIMESTAMP'];
 
 	if (!buildDir) {
 		throw new Error('$AGENT_BUILDDIRECTORY not set');
@@ -106,12 +119,17 @@ async function main(buildDir?: string): Promise<void> {
 		optionsForFile: (filePath) => ({
 			entitlements: getEntitlementsForFile(filePath),
 			hardenedRuntime: true,
+			timestamp,
 		}),
 		preAutoEntitlements: false,
 		preEmbedProvisioningProfile: false,
 		keychain: getKeychainPath(tempDir),
 		version: getElectronVersion(),
 		identity,
+		// 工作流的“Prepare signing certificate”步骤已经校验过证书链并确认身份可用，
+		// 且 CODESIGN_IDENTITY 传的是证书 SHA-1 指纹。这里跳过 osx-sign 自己的
+		// find-identity 名称匹配，避免展示名与指纹的格式差异再次导致身份匹配失败。
+		identityValidation: false,
 	};
 
 	// Only overwrite plist entries for x64 and arm64 builds,

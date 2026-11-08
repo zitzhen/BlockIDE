@@ -79,10 +79,12 @@ jobs:
 
   # 三平台各自独立调用同一个可复用工作流，互不阻塞。
   # 拆成三个 job（而非一个 matrix）是为了让 snap 只等待 Linux，而不是等整组矩阵完成。
+  # secrets: inherit 让签名密钥 SIGNATURE_KEYS 透传给可复用工作流。
   build-linux:
     name: Build linux-x64
     needs: meta
     uses: ./.github/workflows/build.yml
+    secrets: inherit
     with:
       os: ubuntu-24.04
       platform: linux
@@ -93,6 +95,7 @@ jobs:
     name: Build win32-x64
     needs: meta
     uses: ./.github/workflows/build.yml
+    secrets: inherit
     with:
       os: windows-2025
       platform: win32
@@ -103,6 +106,7 @@ jobs:
     name: Build darwin-arm64
     needs: meta
     uses: ./.github/workflows/build.yml
+    secrets: inherit
     with:
       os: macos-26
       platform: darwin

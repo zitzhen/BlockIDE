@@ -27,8 +27,35 @@ export async function ensureElectronTypes(): Promise<void> {
 	}
 
 	const { electronVersion } = getElectronVersion();
-	const url = `https://github.com/electron/electron/releases/download/v${electronVersion}/electron.d.ts`;
-	const contents = await download(url, { checksumSha256: expectedChecksum });
+
+	// GitHub Releases 偶发 504，依次尝试多个镜像；所有镜像都会校验 SHA-256，
+	// 与 build/checksums/electron.txt 比对，保证内容一致。
+	const urls = [
+		`https://github.com/electron/electron/releases/download/v${electronVersion}/electron.d.ts`,
+		`https://registry.npmmirror.com/-/binary/electron/v${electronVersion}/electron.d.ts`,
+		`https://npmmirror.com/mirrors/electron/v${electronVersion}/electron.d.ts`
+	];
+
+	let contents: Uint8Array | undefined;
+	let lastError: Error | undefined;
+	for (const url of urls) {
+		try {
+			contents = await download(url, {
+				checksumSha256: expectedChecksum,
+				attempts: 3,
+				retryDelay: 2000,
+				timeout: 60_000,
+				onRetry: error => console.warn(`Retrying ${url}: ${error.message}`)
+			});
+			break;
+		} catch (error) {
+			lastError = error instanceof Error ? error : new Error(String(error));
+			console.warn(`Mirror failed, trying next: ${url}`);
+		}
+	}
+	if (!contents) {
+		throw lastError ?? new Error('Failed to download electron.d.ts from all mirrors');
+	}
 
 	fs.mkdirSync(path.dirname(electronTypesPath), { recursive: true });
 	fs.writeFileSync(electronTypesPath, contents);
