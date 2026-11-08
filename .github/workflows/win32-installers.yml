@@ -1,0 +1,54 @@
+name: Windows Installers
+
+# 在普通 CI（push / pull request）中实际构建 MSI 与 MSIX，
+# 避免安装包相关改动只能在发版时才暴露问题。
+# 触发条件限定在打包相关文件，避免每次 PR 都跑一次完整的 Windows 产品构建；
+# 需要随时验证时可用 workflow_dispatch 手动触发。
+on:
+  pull_request:
+    branches:
+      - main
+      - 'release/*'
+    paths:
+      - 'build/win32/**'
+      - 'build/gulpfile*.ts'
+      - 'build/lib/**'
+      - 'build/npm/**'
+      - 'product.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build.yml'
+      - '.github/workflows/win32-installers.yml'
+  push:
+    branches:
+      - main
+      - 'release/*'
+    paths:
+      - 'build/win32/**'
+      - 'build/gulpfile*.ts'
+      - 'build/lib/**'
+      - 'build/npm/**'
+      - 'product.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build.yml'
+      - '.github/workflows/win32-installers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installers:
+    name: Build MSI / MSIX
+    uses: ./.github/workflows/build.yml
+    with:
+      os: windows-2025
+      platform: win32
+      arch: x64
+      version: '0.0.0-ci'
