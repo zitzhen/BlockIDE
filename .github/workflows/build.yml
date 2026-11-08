@@ -43,6 +43,11 @@ jobs:
       VSCODE_QUALITY: stable
       GITHUB_TOKEN: ${{ github.token }}
       HAS_SIGNING_KEYS: ${{ secrets.SIGNATURE_KEYS != '' }}
+      # GitHub Releases 偶发 504，Electron 二进制统一走 npmmirror 镜像。
+      # 内容完整性不受影响：@electron/get 从镜像取 SHASUMS256.txt，
+      # gulp-electron 还会再对照仓库内 build/checksums/electron.txt 校验。
+      # 若某次升级 Electron 时镜像尚未同步，临时删除此变量即可回退到 GitHub。
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

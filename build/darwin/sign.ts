@@ -112,6 +112,10 @@ async function main(buildDir?: string): Promise<void> {
 		keychain: getKeychainPath(tempDir),
 		version: getElectronVersion(),
 		identity,
+		// BlockIDE 使用自签名证书，身份在系统信任评估中恒为 NOT_TRUSTED，
+		// osx-sign 默认的有效性校验会因此拒绝签名。codesign 本身允许用未受信任的
+		// 身份签名，故跳过该校验。
+		identityValidation: false,
 	};
 
 	// Only overwrite plist entries for x64 and arm64 builds,
