@@ -7,6 +7,9 @@ name: Build
 # 两者均为 PEM，Windows/macOS 共用同一张证书。调用方通过 secrets: inherit 传入私钥，
 # vars 上下文在可复用工作流中天然可用。构建时会临时合成 PFX（Windows）和 P12（macOS），
 # 对 exe / msi / msix 以及 app / dmg 做本地签名；未设置时跳过所有签名步骤。
+# macOS 的 SIGNATURE_CRT 必须是完整证书链（叶子证书在前，逐级签发 CA 在后，最后一张
+# 为自签名根）或一张自签名证书：codesign 需要自己构建到自签名根的链，只给 CA 签发的
+# 叶子证书会因缺链而报 errSecInternalComponent。
 # 可选 SIGNATURE_KEYS_PASSWORD：私钥若带口令，用它解密。
 on:
   workflow_call:
@@ -289,18 +292,54 @@ jobs:
             exit 1
           fi
 
-          # SIGNATURE_CRT 里可能只有叶子证书，而它的签发者（ZIT Studio Code Signing CA）
-          # 不一定在系统信任库里。先把 PEM 拆成单张证书，便于分别导入和设置信任。
+          # SIGNATURE_CRT 必须是完整证书链或自签名证书：
+          #   - 完整链：叶子证书在前，逐级签发 CA 在后，最后一张是自签名根；
+          #   - 自签名证书：只有一张，且 issuer == subject。
+          # 只给叶子证书不够：codesign 必须自己构建出到自签名根的链，缺失签发 CA 时
+          # 会报 "unable to build chain to self-signed root" + errSecInternalComponent；
+          # 而把叶子证书设成 trustAsRoot 会让链在叶子处截断，codesign 同样拒绝签名。
           CERT_DIR="$RUNNER_TEMP/blockide-certs"
           rm -rf "$CERT_DIR"
           mkdir -p "$CERT_DIR"
           awk -v dir="$CERT_DIR" '/-----BEGIN CERTIFICATE-----/{n++} n > 0 { file = dir "/cert-" n ".pem"; print >> file }' "$CERT"
+          CERT_COUNT="$(ls "$CERT_DIR"/cert-*.pem | wc -l | tr -d ' ')"
           LEAF="$CERT_DIR/cert-1.pem"
-          echo 'Signing certificate:'
+          ROOT="$CERT_DIR/cert-$CERT_COUNT.pem"
+
+          echo "SIGNATURE_CRT contains $CERT_COUNT certificate(s); signing certificate:"
           /usr/bin/openssl x509 -in "$LEAF" -noout -subject -issuer -dates
           # 过期证书无论怎么设置信任都无法用于签名，提前给出明确错误
           if ! /usr/bin/openssl x509 -in "$LEAF" -noout -checkend 0 >/dev/null 2>&1; then
             echo '::error::The certificate in SIGNATURE_CRT has expired; codesign cannot use it.'
+            exit 1
+          fi
+
+          # 校验链完整性：相邻证书的 issuer/subject 必须对上，最后一张必须自签名
+          chain_complete=1
+          index=1
+          while [ "$index" -lt "$CERT_COUNT" ]; do
+            child_issuer="$(/usr/bin/openssl x509 -in "$CERT_DIR/cert-$index.pem" -noout -issuer -nameopt RFC2253 | sed 's/^issuer=//')"
+            parent_subject="$(/usr/bin/openssl x509 -in "$CERT_DIR/cert-$((index + 1)).pem" -noout -subject -nameopt RFC2253 | sed 's/^subject=//')"
+            if [ "$child_issuer" != "$parent_subject" ]; then
+              chain_complete=0
+              break
+            fi
+            index=$((index + 1))
+          done
+          root_issuer="$(/usr/bin/openssl x509 -in "$ROOT" -noout -issuer -nameopt RFC2253 | sed 's/^issuer=//')"
+          root_subject="$(/usr/bin/openssl x509 -in "$ROOT" -noout -subject -nameopt RFC2253 | sed 's/^subject=//')"
+          if [ "$root_issuer" != "$root_subject" ]; then
+            chain_complete=0
+          fi
+
+          if [ "$chain_complete" -ne 1 ]; then
+            echo "::error::SIGNATURE_CRT has $CERT_COUNT certificate(s), but the last one is not a self-signed root."
+            echo "::error::Last certificate issuer: $root_issuer"
+            echo "::error::Last certificate subject: $root_subject"
+            echo '::error::codesign must build the chain itself; a bare leaf certificate cannot be used for signing.'
+            echo '::error::Append the issuing CA certificate to SIGNATURE_CRT (leaf first, then each CA, ending with the self-signed root):'
+            echo '::error::    cat leaf.crt ca.crt > chain.pem   # paste chain.pem into SIGNATURE_CRT'
+            echo '::error::Or replace SIGNATURE_CRT with a self-signed certificate generated from the existing SIGNATURE_KEYS.'
             exit 1
           fi
 
@@ -325,28 +364,18 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
 
-          # SIGNATURE_CRT 若带有中间/根证书，一并导入临时钥匙串，便于系统构建证书链
+          # 中间/根 CA 必须进钥匙串，codesign 才能把完整的链嵌进签名
           for extra in "$CERT_DIR"/cert-*.pem; do
             if [ "$extra" != "$LEAF" ]; then
               security import "$extra" -k "$KEYCHAIN"
             fi
           done
 
-          # 仅把证书注册成 trustRoot 不足以让它变成可用身份：trustRoot 只对自签名
-          # 证书有效。SIGNATURE_CRT 里的叶子证书由 "ZIT Studio Code Signing CA" 签发，
-          # 而该 CA 不在系统信任库里，macOS 无法构建完整链，身份会被判定为
-          # CSSMERR_TP_NOT_TRUSTED，codesign 也就找不到可签名的身份。
-          # 因此：自签名证书用 trustRoot；由缺失 CA 签发的叶子证书用 trustAsRoot，
-          # 把叶子证书本身固定为信任锚。只信任 codeSign 策略，避免证书被用于 TLS。
-          leaf_issuer="$(/usr/bin/openssl x509 -in "$LEAF" -noout -issuer -nameopt RFC2253)"
-          leaf_subject="$(/usr/bin/openssl x509 -in "$LEAF" -noout -subject -nameopt RFC2253)"
-          if [ "$leaf_issuer" = "$leaf_subject" ]; then
-            trust_type=trustRoot
-          else
-            trust_type=trustAsRoot
-          fi
-          echo "Registering signing certificate as $trust_type for the codeSign policy"
-          sudo security add-trusted-cert -d -r "$trust_type" -p codeSign -k /Library/Keychains/System.keychain "$LEAF"
+          # 只把链上的自签名根注册为信任锚，叶子证书保持“使用系统默认”。
+          # 千万不要把叶子证书设成 trustAsRoot：那会让链在叶子处截断，
+          # codesign 报 "unable to build chain to self-signed root" + errSecInternalComponent。
+          echo "Registering chain root as trustRoot for the codeSign policy: $ROOT"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$ROOT"
 
           # 用证书的 SHA-1 指纹而不是展示名作为身份：find-identity 的展示名可能带
           # "(CSSMERR_TP_NOT_TRUSTED)" 之类的诊断后缀，按引号截取会把后缀一起写进
@@ -364,11 +393,22 @@ jobs:
 
           valid_line="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "$identity" || true)"
           if [ -z "$valid_line" ] || printf '%s\n' "$valid_line" | grep -q 'CSSMERR'; then
-            echo "::warning::Signing identity $identity is still not trusted; codesign may refuse it."
-            echo "::warning::Make SIGNATURE_CRT contain the full certificate chain (leaf + issuing CA) or trust the issuing CA."
             security find-identity -p codesigning "$KEYCHAIN" || true
+            security verify-cert -c "$LEAF" -p codeSign || true
+            echo "::error::Signing identity $identity is still not trusted after registering $ROOT as the chain root."
+            exit 1
           fi
-          echo "Signing identity: $identity (trust type: $trust_type)"
+          echo "Signing identity: $identity"
+
+          # 用一个临时文件做真实签名预检：链不完整或钥匙串访问有问题时，
+          # codesign 会返回 errSecInternalComponent；提前失败好过几分钟后才报错。
+          PREFLIGHT="$RUNNER_TEMP/blockide-signing-preflight"
+          printf 'preflight\n' > "$PREFLIGHT"
+          if ! codesign --force --sign "$identity" --keychain "$KEYCHAIN" --timestamp=none "$PREFLIGHT"; then
+            echo '::error::codesign preflight failed; the signing identity or its certificate chain is unusable.'
+            exit 1
+          fi
+          rm -f "$PREFLIGHT"
 
           {
             echo "CODESIGN_IDENTITY=$identity"
