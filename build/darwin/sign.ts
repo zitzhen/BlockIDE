@@ -93,6 +93,9 @@ async function main(buildDir?: string): Promise<void> {
 	const tempDir = process.env['AGENT_TEMPDIRECTORY'];
 	const arch = process.env['VSCODE_ARCH'];
 	const identity = normalizeSigningIdentity(process.env['CODESIGN_IDENTITY']);
+	// Apple 的时间戳服务不保证支持非 Apple 签发的身份，使用自签名/私有 CA 证书时
+	// 工作流会传 `none` 显式关闭时间戳；未设置时沿用 osx-sign 的默认行为。
+	const timestamp = process.env['CODESIGN_TIMESTAMP'];
 
 	if (!buildDir) {
 		throw new Error('$AGENT_BUILDDIRECTORY not set');
@@ -116,15 +119,16 @@ async function main(buildDir?: string): Promise<void> {
 		optionsForFile: (filePath) => ({
 			entitlements: getEntitlementsForFile(filePath),
 			hardenedRuntime: true,
+			timestamp,
 		}),
 		preAutoEntitlements: false,
 		preEmbedProvisioningProfile: false,
 		keychain: getKeychainPath(tempDir),
 		version: getElectronVersion(),
 		identity,
-		// BlockIDE 使用自签名证书，身份在系统信任评估中恒为 NOT_TRUSTED，
-		// osx-sign 默认的有效性校验会因此拒绝签名。codesign 本身允许用未受信任的
-		// 身份签名，故跳过该校验。
+		// 工作流的“Prepare signing certificate”步骤已经校验过证书链并确认身份可用，
+		// 且 CODESIGN_IDENTITY 传的是证书 SHA-1 指纹。这里跳过 osx-sign 自己的
+		// find-identity 名称匹配，避免展示名与指纹的格式差异再次导致身份匹配失败。
 		identityValidation: false,
 	};
 

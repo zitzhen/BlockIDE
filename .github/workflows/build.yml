@@ -7,9 +7,10 @@ name: Build
 # 两者均为 PEM，Windows/macOS 共用同一张证书。调用方通过 secrets: inherit 传入私钥，
 # vars 上下文在可复用工作流中天然可用。构建时会临时合成 PFX（Windows）和 P12（macOS），
 # 对 exe / msi / msix 以及 app / dmg 做本地签名；未设置时跳过所有签名步骤。
-# macOS 的 SIGNATURE_CRT 必须是完整证书链（叶子证书在前，逐级签发 CA 在后，最后一张
-# 为自签名根）或一张自签名证书：codesign 需要自己构建到自签名根的链，只给 CA 签发的
-# 叶子证书会因缺链而报 errSecInternalComponent。
+# macOS 的 SIGNATURE_CRT 建议是完整证书链（叶子证书在前，逐级签发 CA 在后，最后一张
+# 为自签名根）：codesign 需要自己构建到自签名根的链，只给 CA 签发的叶子证书会因缺链而
+# 报 errSecInternalComponent。若只给了叶子证书，macOS 步骤会用同一把私钥临时生成一张
+# 自签名证书完成签名（每次构建都不同），补上 CA 证书后会自动改回用你提供的链。
 # 可选 SIGNATURE_KEYS_PASSWORD：私钥若带口令，用它解密。
 on:
   workflow_call:
@@ -332,15 +333,47 @@ jobs:
             chain_complete=0
           fi
 
-          if [ "$chain_complete" -ne 1 ]; then
-            echo "::error::SIGNATURE_CRT has $CERT_COUNT certificate(s), but the last one is not a self-signed root."
-            echo "::error::Last certificate issuer: $root_issuer"
-            echo "::error::Last certificate subject: $root_subject"
-            echo '::error::codesign must build the chain itself; a bare leaf certificate cannot be used for signing.'
-            echo '::error::Append the issuing CA certificate to SIGNATURE_CRT (leaf first, then each CA, ending with the self-signed root):'
-            echo '::error::    cat leaf.crt ca.crt > chain.pem   # paste chain.pem into SIGNATURE_CRT'
-            echo '::error::Or replace SIGNATURE_CRT with a self-signed certificate generated from the existing SIGNATURE_KEYS.'
-            exit 1
+          if [ "$chain_complete" -eq 1 ]; then
+            SIGN_CERT="$LEAF"
+            TRUST_CERT="$ROOT"
+            echo "Using the provided certificate chain (root: $ROOT)"
+          else
+            # SIGNATURE_CRT 是 CA 签发的叶子证书，但缺签发它的 CA，codesign 无法
+            # 构建到自签名根的链。这里用同一把私钥就地补一张自签名证书，
+            # 保留原证书的 subject（CN/O/OU），让 CI 无需人工改变量也能签名。
+            # 代价：每次构建生成的证书不同（序列号/有效期不同）。如果想固定证书，
+            # 把签发 CA 的证书补进 SIGNATURE_CRT 即可，工作流会自动改回用你的链。
+            echo "::warning::SIGNATURE_CRT does not end in a self-signed root (last issuer: $root_issuer)."
+            echo '::warning::Generating a self-signed certificate from SIGNATURE_KEYS for this build.'
+            echo '::warning::Add the issuing CA certificate to SIGNATURE_CRT to sign with your own stable certificate chain.'
+            SIGN_CERT="$RUNNER_TEMP/blockide-signing-selfsigned.crt"
+            TRUST_CERT="$SIGN_CERT"
+            EXT_FILE="$RUNNER_TEMP/blockide-signing-selfsigned.ext"
+            CSR_FILE="$RUNNER_TEMP/blockide-signing-selfsigned.csr"
+            printf '%s\n' \
+              '[codesign]' \
+              'basicConstraints=critical,CA:TRUE' \
+              'keyUsage=critical,digitalSignature,keyCertSign' \
+              'extendedKeyUsage=critical,codeSigning' > "$EXT_FILE"
+            if [ -n "${SIGNATURE_KEYS_PASSWORD:-}" ]; then
+              /usr/bin/openssl x509 -x509toreq -in "$LEAF" -signkey "$KEY" -passin "pass:$SIGNATURE_KEYS_PASSWORD" -out "$CSR_FILE"
+              /usr/bin/openssl x509 -req -in "$CSR_FILE" -signkey "$KEY" -passin "pass:$SIGNATURE_KEYS_PASSWORD" -sha256 -days 7300 -extfile "$EXT_FILE" -extensions codesign -out "$SIGN_CERT"
+            else
+              /usr/bin/openssl x509 -x509toreq -in "$LEAF" -signkey "$KEY" -out "$CSR_FILE"
+              /usr/bin/openssl x509 -req -in "$CSR_FILE" -signkey "$KEY" -sha256 -days 7300 -extfile "$EXT_FILE" -extensions codesign -out "$SIGN_CERT"
+            fi
+            echo 'Generated self-signed signing certificate:'
+            /usr/bin/openssl x509 -in "$SIGN_CERT" -noout -subject -issuer -dates
+          fi
+
+          # Apple 的时间戳服务不保证支持非 Apple 签发的身份（codesign/osx-sign
+          # 文档均注明），私有证书的时间戳也没有实际意义：直接关闭，避免签名阶段
+          # 因时间戳服务拒绝而失败。只有证书链以 Apple 根证书结尾时才启用。
+          if [ "$chain_complete" -eq 1 ] && printf '%s' "$root_subject" | grep -qi 'O=Apple Inc\.'; then
+            echo 'Using the Apple timestamp service (chain is anchored at an Apple root)'
+          else
+            echo 'Disabling codesign timestamping (non-Apple signing identity)'
+            echo 'CODESIGN_TIMESTAMP=none' >> "$GITHUB_ENV"
           fi
 
           KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
@@ -350,10 +383,10 @@ jobs:
           # 这里不拼空数组参数，macOS 默认的 bash 3.2 在 set -u 下展开空数组会报错。
           # 只导出叶子证书；证书链中的其他证书稍后单独导入临时钥匙串。
           if [ -n "${SIGNATURE_KEYS_PASSWORD:-}" ]; then
-            /usr/bin/openssl pkcs12 -export -inkey "$KEY" -in "$LEAF" -out "$P12" \
+            /usr/bin/openssl pkcs12 -export -inkey "$KEY" -in "$SIGN_CERT" -out "$P12" \
               -passout "pass:$P12_PASSWORD" -passin "pass:$SIGNATURE_KEYS_PASSWORD" -name BlockIDE
           else
-            /usr/bin/openssl pkcs12 -export -inkey "$KEY" -in "$LEAF" -out "$P12" \
+            /usr/bin/openssl pkcs12 -export -inkey "$KEY" -in "$SIGN_CERT" -out "$P12" \
               -passout "pass:$P12_PASSWORD" -name BlockIDE
           fi
 
@@ -364,18 +397,22 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
 
-          # 中间/根 CA 必须进钥匙串，codesign 才能把完整的链嵌进签名
-          for extra in "$CERT_DIR"/cert-*.pem; do
-            if [ "$extra" != "$LEAF" ]; then
-              security import "$extra" -k "$KEYCHAIN"
-            fi
-          done
+          # 中间/根 CA 必须进钥匙串，codesign 才能把完整的链嵌进签名。
+          # 自动生成自签名证书时没有额外证书需要导入。
+          if [ "$SIGN_CERT" = "$LEAF" ]; then
+            for extra in "$CERT_DIR"/cert-*.pem; do
+              if [ "$extra" != "$LEAF" ]; then
+                security import "$extra" -k "$KEYCHAIN"
+              fi
+            done
+          fi
 
-          # 只把链上的自签名根注册为信任锚，叶子证书保持“使用系统默认”。
-          # 千万不要把叶子证书设成 trustAsRoot：那会让链在叶子处截断，
-          # codesign 报 "unable to build chain to self-signed root" + errSecInternalComponent。
-          echo "Registering chain root as trustRoot for the codeSign policy: $ROOT"
-          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$ROOT"
+          # 只把链上的自签名根（或自动生成的自签名证书）注册为信任锚，
+          # 叶子证书保持“使用系统默认”。千万不要把叶子证书设成 trustAsRoot：
+          # 那会让链在叶子处截断，codesign 报
+          # "unable to build chain to self-signed root" + errSecInternalComponent。
+          echo "Registering chain root as trustRoot for the codeSign policy: $TRUST_CERT"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$TRUST_CERT"
 
           # 用证书的 SHA-1 指纹而不是展示名作为身份：find-identity 的展示名可能带
           # "(CSSMERR_TP_NOT_TRUSTED)" 之类的诊断后缀，按引号截取会把后缀一起写进
@@ -394,16 +431,23 @@ jobs:
           valid_line="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "$identity" || true)"
           if [ -z "$valid_line" ] || printf '%s\n' "$valid_line" | grep -q 'CSSMERR'; then
             security find-identity -p codesigning "$KEYCHAIN" || true
-            security verify-cert -c "$LEAF" -p codeSign || true
-            echo "::error::Signing identity $identity is still not trusted after registering $ROOT as the chain root."
+            security verify-cert -c "$SIGN_CERT" -p codeSign || true
+            echo "::error::Signing identity $identity is still not trusted after registering $TRUST_CERT as the trust root."
             exit 1
           fi
           echo "Signing identity: $identity"
 
-          # 用一个临时文件做真实签名预检：链不完整或钥匙串访问有问题时，
-          # codesign 会返回 errSecInternalComponent；提前失败好过几分钟后才报错。
+          # 用主可执行文件的副本做一次真实签名预检：证书链不完整或钥匙串访问
+          # 有问题时 codesign 会返回 errSecInternalComponent，这里提前失败，
+          # 不必等到几分钟后签整个 app 才报错。
           PREFLIGHT="$RUNNER_TEMP/blockide-signing-preflight"
-          printf 'preflight\n' > "$PREFLIGHT"
+          PRODUCT_NAME="$(node -p "require('./product.json').nameLong")"
+          APP_BINARY="$(dirname "$GITHUB_WORKSPACE")/VSCode-darwin-${VSCODE_ARCH}/${PRODUCT_NAME}.app/Contents/MacOS/${PRODUCT_NAME}"
+          if [ -f "$APP_BINARY" ]; then
+            cp -p "$APP_BINARY" "$PREFLIGHT"
+          else
+            printf 'preflight\n' > "$PREFLIGHT"
+          fi
           if ! codesign --force --sign "$identity" --keychain "$KEYCHAIN" --timestamp=none "$PREFLIGHT"; then
             echo '::error::codesign preflight failed; the signing identity or its certificate chain is unusable.'
             exit 1
