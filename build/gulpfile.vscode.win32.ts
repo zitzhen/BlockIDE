@@ -275,9 +275,10 @@ function buildWin32Msi(arch: string): task.CallbackTask {
 				'-o', wixobjPath
 			], outputPath);
 
+			const msiPath = path.join(outputPath, `${product.nameShort}-${normalizeMsiVersion(pkg.version)}-${arch}.msi`);
 			await spawnTool(findWixTool('light.exe'), [
 				wixobjPath,
-				'-o', path.join(outputPath, `${product.nameShort}-${normalizeMsiVersion(pkg.version)}-${arch}.msi`)
+				'-o', msiPath
 			], outputPath);
 		})().then(() => cb?.(), err => cb?.(err instanceof Error ? err : new Error(String(err))));
 	};
@@ -337,25 +338,6 @@ function buildWin32Msix(arch: string): task.CallbackTask {
 				'/p', msixPath,
 				'/o'
 			], outputPath);
-
-			const pfxPath = process.env['BLOCKIDE_MSIX_PFX'];
-			if (pfxPath) {
-				const signArgs = [
-					'sign',
-					'/fd', 'SHA256',
-					'/f', pfxPath,
-					'/tr', 'http://timestamp.digicert.com',
-					'/td', 'SHA256'
-				];
-
-				const pfxPassword = process.env['BLOCKIDE_MSIX_PFX_PASSWORD'];
-				if (pfxPassword) {
-					signArgs.push('/p', pfxPassword);
-				}
-
-				signArgs.push(msixPath);
-				await spawnTool(findWindowsSdkTool('signtool.exe', arch, 'SIGNTOOL'), signArgs, outputPath);
-			}
 		})().then(() => cb?.(), err => cb?.(err instanceof Error ? err : new Error(String(err))));
 	};
 }
