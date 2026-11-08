@@ -304,6 +304,10 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
 
+          # 自签名证书默认不受信任，find-identity -v 会把未受信任身份全部过滤掉。
+          # 必须注册为系统信任根，身份才会被判定为 valid，codesign 也才能建立完整链。
+          sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$CERT"
+
           # 自签名证书可能没有代码签名 EKU，先按 codesigning 过滤，取不到就退回全部身份
           identity="$(security find-identity -v -p codesigning "$KEYCHAIN" | sed -n 's/.*"\(.*\)"/\1/p' | head -1)"
           if [ -z "$identity" ]; then
