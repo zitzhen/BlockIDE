@@ -261,7 +261,7 @@ function buildWin32Msi(arch: string): task.CallbackTask {
 				aboutUrl
 			}), 'utf8');
 
-			const wixArch = { 'x64': 'x64', 'arm64': 'arm64' }[arch];
+			const wixArch = arch === 'arm64' ? 'arm64' : arch === 'x64' ? 'x64' : undefined;
 			if (!wixArch) {
 				throw new Error(`Unsupported architecture: ${arch}`);
 			}
