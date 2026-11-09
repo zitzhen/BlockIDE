@@ -3336,7 +3336,7 @@ suite('CloudSandboxAgentHostContribution discovery refresh', () => {
 			h.setFocused(true);
 			await h.runDiscovery('automatic');
 			await h.runDiscovery();
-			assert.deepStrictEqual(requests.map(({ diagnostics, ...options } = {}) => options), [
+			assert.deepStrictEqual(requests.map(({ diagnostics, ...options }: ICloudSandboxDiscoveryOptions = {}) => options), [
 				{ incremental: false, includeArchived: false, trigger: 'startup' },
 				...connected ? [] : [{ incremental: true, includeArchived: false, trigger: 'focus' }],
 				{ incremental: false, includeArchived: false, trigger: 'manual' },
@@ -3366,7 +3366,7 @@ suite('CloudSandboxAgentHostContribution discovery refresh', () => {
 		h.changeAccount('["github","account-1"]');
 		await listed.p;
 		await h.contribution.checkForUpdates();
-		assert.deepStrictEqual({ requests: requests.map(({ diagnostics, ...options } = {}) => options), disposed: provider.disposed, disconnects: h.disconnectedFrom, negotiations }, {
+		assert.deepStrictEqual({ requests: requests.map(({ diagnostics, ...options }: ICloudSandboxDiscoveryOptions = {}) => options), disposed: provider.disposed, disconnects: h.disconnectedFrom, negotiations }, {
 			requests: [
 				{ incremental: false, includeArchived: false, trigger: 'startup' },
 				{ incremental: true, includeArchived: false, trigger: 'configurationChange' },
