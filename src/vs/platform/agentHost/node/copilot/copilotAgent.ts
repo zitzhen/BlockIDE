@@ -12113,6 +12113,17 @@ class SessionPluginController extends Disposable {
 			...result,
 			...workspaceDefinitions.map(definition => definition.customization),
 		]).map(server => server.name));
+		for (const plugin of this._runtimePlugins) {
+			const native = discovered.find(customization => customization.type === CustomizationType.Plugin && isEqual(URI.parse(customization.uri), URI.parse(plugin.uri)));
+			const children = (native?.type === CustomizationType.Plugin ? native.children ?? plugin.children : plugin.children)
+				?.filter(child => child.type !== CustomizationType.McpServer || !declaredMcpNames.has(child.name));
+			result.push({ ...plugin, children });
+			for (const child of children ?? []) {
+				if (child.type === CustomizationType.McpServer) {
+					declaredMcpNames.add(child.name);
+				}
+			}
+		}
 		for (const customization of discovered) {
 			if (customization.type === CustomizationType.Plugin && explicitPluginIds.has(customization.id)) {
 				continue;
