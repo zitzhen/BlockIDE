@@ -124,8 +124,12 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # $ErrorActionPreference 只对 cmdlet 生效，原生进程的非零退出码不会中断脚本，
+          # 因此每个 npm 调用都要显式检查 $LASTEXITCODE。
           npm run gulp vscode-win32-x64-min
+          if ($LASTEXITCODE -ne 0) { throw "gulp vscode-win32-x64-min failed with exit code $LASTEXITCODE" }
           npm run gulp vscode-win32-x64-inno-updater
+          if ($LASTEXITCODE -ne 0) { throw "gulp vscode-win32-x64-inno-updater failed with exit code $LASTEXITCODE" }
 
       # 私钥来自 secrets.SIGNATURE_KEYS，证书来自 vars.SIGNATURE_CRT，分别落盘后再合成 PFX；
       # 证书 Subject 同时用作 MSIX 的 Publisher，否则 MSIX 签名会失败
@@ -164,13 +168,27 @@ jobs:
           & $openssl pkcs12 -export -inkey $keyPath -in $certPath -out $pfxPath -passout "pass:$password" -name BlockIDE @keyArgs
           if ($LASTEXITCODE -ne 0) { throw "openssl pkcs12 exited with code $LASTEXITCODE" }
 
-          $subject = ((& $openssl x509 -in $certPath -noout -subject -nameopt RFC2253) -join '') -replace '^subject\s*=\s*', ''
-          if (-not $subject) { throw 'Failed to read certificate subject from SIGNATURE_CRT' }
+          # MSIX 的 Publisher 必须与签名证书的 Subject 一致，否则签出来的包无法安装。
+          # 优先从 PFX 里读 Subject：它正是 Windows 比较时使用的规范形式
+          # （'CN=..., OU=..., O=..., C=CN'）。若改用 openssl 的 RFC2253 输出
+          # （'CN=...,OU=...,O=...'，逗号后没有空格），MakeAppx 的清单校验会直接拒绝，
+          # 报 C00CE169 / 'Publisher ... failed to parse'。
+          $publisher = $null
+          try {
+            $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, $password)
+            try { $publisher = $certificate.Subject } finally { $certificate.Dispose() }
+          } catch {
+            Write-Warning "Cannot read the subject from the PFX ($($_.Exception.Message)); falling back to openssl"
+            $subject = ((& $openssl x509 -in $certPath -noout -subject -nameopt RFC2253) -join '') -replace '^subject\s*=\s*', ''
+            # RFC2253 用 ',' 分隔，MakeAppx 要求 ',' + 空格
+            $publisher = $subject -replace ',(?=[^,=]+=)', ', '
+          }
+          if (-not $publisher) { throw 'Failed to read the certificate subject for the MSIX publisher' }
 
           "SIGNING_PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "SIGNING_PFX_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "BLOCKIDE_MSIX_PUBLISHER=$subject" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Signing certificate subject: $subject"
+          "BLOCKIDE_MSIX_PUBLISHER=$publisher" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Signing certificate subject: $publisher"
 
       - name: Sign Windows client
         if: inputs.platform == 'win32' && env.HAS_SIGNING_KEYS == 'true'
@@ -204,6 +222,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
 
+          # $ErrorActionPreference 只对 cmdlet 生效；npm/gulp 这类原生进程失败时脚本会继续往下跑，
+          # v1.0.2 的 MSIX 就是这样在失败后被静默跳过、只发布了 3 个安装包的。
+          function Invoke-Gulp([string]$name) {
+            npm run gulp $name
+            if ($LASTEXITCODE -ne 0) { throw "gulp $name failed with exit code $LASTEXITCODE" }
+          }
+
           if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
             choco install wixtoolset --no-progress -y
           }
@@ -223,9 +248,9 @@ jobs:
             $env:PATH = "$(Join-Path $sdkDirectory.FullName 'x64');$env:PATH"
           }
 
-          npm run gulp vscode-win32-x64-system-setup
-          npm run gulp vscode-win32-x64-msi
-          npm run gulp vscode-win32-x64-msix
+          Invoke-Gulp vscode-win32-x64-system-setup
+          Invoke-Gulp vscode-win32-x64-msi
+          Invoke-Gulp vscode-win32-x64-msix
 
           Copy-Item ".build\win32-x64\system-setup\VSCodeSetup.exe" "artifacts\BlockIDE-win32-x64-$env:VERSION.exe"
           Copy-Item ".build\win32-x64\msi\BlockIDE-*-x64.msi" "artifacts\BlockIDE-win32-x64-$env:VERSION.msi"
@@ -234,8 +259,18 @@ jobs:
           Push-Location (Split-Path $env:GITHUB_WORKSPACE)
           try {
             7z.exe a -tzip "$env:GITHUB_WORKSPACE\artifacts\BlockIDE-win32-x64-$env:VERSION.zip" "VSCode-win32-x64"
+            if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
           } finally {
             Pop-Location
+          }
+
+          # 上传前确认四个安装包都在，缺任何一个都说明有步骤被静默跳过
+          $expected = foreach ($extension in 'exe', 'zip', 'msi', 'msix') {
+            Join-Path 'artifacts' "BlockIDE-win32-x64-$env:VERSION.$extension"
+          }
+          $missing = @($expected | Where-Object { -not (Test-Path $_) -or (Get-Item $_).Length -eq 0 })
+          if ($missing.Count -gt 0) {
+            throw "Missing Windows artifacts: $($missing -join ', ')"
           }
 
       - name: Sign Windows installers
