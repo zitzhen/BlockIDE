@@ -227,6 +227,7 @@ configurationRegistry.registerConfiguration({
 			default: false,
 			scope: ConfigurationScope.APPLICATION,
 			tags: ['experimental'],
+			experiment: { mode: 'startup' },
 			agentHost: { key: ChatProvidersConfigKey.Enabled },
 		},
 		...chatMoveConfigurationProperties,
