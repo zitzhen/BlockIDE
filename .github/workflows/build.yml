@@ -120,6 +120,26 @@ jobs:
           tar -czf snap-src.tar.gz -C "$(dirname "$SNAP_DIR")" "$(basename "$SNAP_DIR")"
 
       # -------------------------------------------------------------- Windows
+      # patchWin32Dependencies 会用 signtool.exe 剥掉依赖库上失效的 Authenticode 签名，
+      # 而 GitHub 的 Windows 镜像不保证 Windows SDK 的 bin 在 PATH 里；缺了会 spawn
+      # ENOENT，让整条客户端构建失败。
+      - name: Add Windows SDK to PATH
+        if: inputs.platform == 'win32'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
+          # bin 下同时存在 x86/x64 等目录，只按版本号目录排序，避免选中 x86 拼出错路径
+          $sdkDirectory = Get-ChildItem $sdkRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName 'x64' } |
+            Where-Object { Test-Path (Join-Path $_ 'signtool.exe') } |
+            Select-Object -First 1
+          if (-not $sdkDirectory) { throw "signtool.exe not found under $sdkRoot" }
+          "PATH=$sdkDirectory;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Windows SDK tools: $sdkDirectory"
+
       # 先产出客户端，签名后被打进 exe / zip / msi / msix，保证安装后主程序也是已签名的
       - name: Build Windows client
         if: inputs.platform == 'win32'
