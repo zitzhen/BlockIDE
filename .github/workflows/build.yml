@@ -1,7 +1,9 @@
 name: Build
 
 # 可复用的单平台构建工作流，由 release.yml 按平台矩阵调用。
-# 每个平台的所有安装包在此完成并上传为 release-<platform>-<arch> 工件。
+# 每个平台的安装包在此完成并上传为 release-<platform>-<arch> 工件。
+# Windows 的 MSI / MSIX 由单独的 installers job 产出（release-<platform>-installers-<arch>），
+# 复用 build job 上传的客户端 zip，因此只改安装包时不必重跑整条 Windows 构建。
 #
 # 签名：私钥放在秘密变量 SIGNATURE_KEYS。macOS 的证书来源按优先级：
 #   1) secrets.CRT 或 vars.CRT —— 完整证书链（叶子 + 逐级签发 CA，最后是自签名根）
@@ -131,64 +133,16 @@ jobs:
           npm run gulp vscode-win32-x64-inno-updater
           if ($LASTEXITCODE -ne 0) { throw "gulp vscode-win32-x64-inno-updater failed with exit code $LASTEXITCODE" }
 
-      # 私钥来自 secrets.SIGNATURE_KEYS，证书来自 vars.SIGNATURE_CRT，分别落盘后再合成 PFX；
-      # 证书 Subject 同时用作 MSIX 的 Publisher，否则 MSIX 签名会失败
+      # 私钥来自 secrets.SIGNATURE_KEYS，证书来自 vars.SIGNATURE_CRT，合成 PFX 后
+      # 用于给客户端和安装包签名；证书 Subject 同时作为 MSIX 的 Publisher。
+      # 逻辑放在 .github/actions/prepare-windows-signing，供客户端 job 和安装包 job 共用。
       - name: Prepare signing certificate (Windows)
         if: inputs.platform == 'win32' && env.HAS_SIGNING_KEYS == 'true'
-        shell: pwsh
-        env:
-          SIGNING_KEY: ${{ secrets.SIGNATURE_KEYS }}
-          SIGNING_CRT: ${{ vars.SIGNATURE_CRT }}
-          SIGNATURE_KEYS_PASSWORD: ${{ secrets.SIGNATURE_KEYS_PASSWORD }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          if (-not $env:SIGNING_CRT) { throw 'SIGNATURE_CRT variable is not set; it must contain the PEM certificate' }
-
-          $keyPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.key'
-          $certPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.crt'
-          [System.IO.File]::WriteAllText($keyPath, $env:SIGNING_KEY)
-          [System.IO.File]::WriteAllText($certPath, $env:SIGNING_CRT)
-          if (-not (Select-String -Path $certPath -Pattern 'BEGIN CERTIFICATE' -Quiet)) {
-            throw 'SIGNATURE_CRT does not contain a BEGIN CERTIFICATE block'
-          }
-
-          $openssl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
-          if (-not $openssl) {
-            $gitOpenSsl = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe'
-            if (Test-Path $gitOpenSsl) { $openssl = $gitOpenSsl }
-          }
-          if (-not $openssl) { throw 'openssl.exe not found, cannot build the PFX from SIGNATURE_KEYS/SIGNATURE_CRT' }
-
-          $password = [System.Guid]::NewGuid().ToString('N')
-          $pfxPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.pfx'
-          $keyArgs = @()
-          if ($env:SIGNATURE_KEYS_PASSWORD) { $keyArgs = @('-passin', "pass:$env:SIGNATURE_KEYS_PASSWORD") }
-
-          & $openssl pkcs12 -export -inkey $keyPath -in $certPath -out $pfxPath -passout "pass:$password" -name BlockIDE @keyArgs
-          if ($LASTEXITCODE -ne 0) { throw "openssl pkcs12 exited with code $LASTEXITCODE" }
-
-          # MSIX 的 Publisher 必须与签名证书的 Subject 一致，否则签出来的包无法安装。
-          # 优先从 PFX 里读 Subject：它正是 Windows 比较时使用的规范形式
-          # （'CN=..., OU=..., O=..., C=CN'）。若改用 openssl 的 RFC2253 输出
-          # （'CN=...,OU=...,O=...'，逗号后没有空格），MakeAppx 的清单校验会直接拒绝，
-          # 报 C00CE169 / 'Publisher ... failed to parse'。
-          $publisher = $null
-          try {
-            $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, $password)
-            try { $publisher = $certificate.Subject } finally { $certificate.Dispose() }
-          } catch {
-            Write-Warning "Cannot read the subject from the PFX ($($_.Exception.Message)); falling back to openssl"
-            $subject = ((& $openssl x509 -in $certPath -noout -subject -nameopt RFC2253) -join '') -replace '^subject\s*=\s*', ''
-            # RFC2253 用 ',' 分隔，MakeAppx 要求 ',' + 空格
-            $publisher = $subject -replace ',(?=[^,=]+=)', ', '
-          }
-          if (-not $publisher) { throw 'Failed to read the certificate subject for the MSIX publisher' }
-
-          "SIGNING_PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "SIGNING_PFX_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "BLOCKIDE_MSIX_PUBLISHER=$publisher" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Signing certificate subject: $publisher"
+        uses: ./.github/actions/prepare-windows-signing
+        with:
+          signing-key: ${{ secrets.SIGNATURE_KEYS }}
+          signing-crt: ${{ vars.SIGNATURE_CRT }}
+          signing-key-password: ${{ secrets.SIGNATURE_KEYS_PASSWORD }}
 
       - name: Sign Windows client
         if: inputs.platform == 'win32' && env.HAS_SIGNING_KEYS == 'true'
@@ -215,7 +169,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($file.Name)" }
           }
 
-      - name: Package Windows (exe / zip / msi / msix)
+      - name: Package Windows (exe / zip)
         if: inputs.platform == 'win32'
         shell: pwsh
         run: |
@@ -229,33 +183,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "gulp $name failed with exit code $LASTEXITCODE" }
           }
 
-          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
-            choco install wixtoolset --no-progress -y
-          }
-
-          $wixDirectory = Get-ChildItem 'C:\Program Files (x86)' -Directory -Filter 'WiX Toolset v3*' -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $wixDirectory) {
-            throw 'WiX Toolset v3 is required to build the MSI'
-          }
-          $env:WIX_BIN = Join-Path $wixDirectory.FullName 'bin'
-          $env:PATH = "$env:WIX_BIN;$env:PATH"
-
-          $sdkDirectory = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
-            Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
-          if ($sdkDirectory) {
-            $env:PATH = "$(Join-Path $sdkDirectory.FullName 'x64');$env:PATH"
-          }
-
           Invoke-Gulp vscode-win32-x64-system-setup
-          Invoke-Gulp vscode-win32-x64-msi
-          Invoke-Gulp vscode-win32-x64-msix
 
           Copy-Item ".build\win32-x64\system-setup\VSCodeSetup.exe" "artifacts\BlockIDE-win32-x64-$env:VERSION.exe"
-          Copy-Item ".build\win32-x64\msi\BlockIDE-*-x64.msi" "artifacts\BlockIDE-win32-x64-$env:VERSION.msi"
-          Copy-Item ".build\win32-x64\msix\BlockIDE-*-x64.msix" "artifacts\BlockIDE-win32-x64-$env:VERSION.msix"
 
+          # zip 既是免安装版，也是 installers job 构建 MSI/MSIX 的输入
           Push-Location (Split-Path $env:GITHUB_WORKSPACE)
           try {
             7z.exe a -tzip "$env:GITHUB_WORKSPACE\artifacts\BlockIDE-win32-x64-$env:VERSION.zip" "VSCode-win32-x64"
@@ -264,8 +196,8 @@ jobs:
             Pop-Location
           }
 
-          # 上传前确认四个安装包都在，缺任何一个都说明有步骤被静默跳过
-          $expected = foreach ($extension in 'exe', 'zip', 'msi', 'msix') {
+          # 上传前确认两个产物都在，缺任何一个都说明有步骤被静默跳过
+          $expected = foreach ($extension in 'exe', 'zip') {
             Join-Path 'artifacts' "BlockIDE-win32-x64-$env:VERSION.$extension"
           }
           $missing = @($expected | Where-Object { -not (Test-Path $_) -or (Get-Item $_).Length -eq 0 })
@@ -273,7 +205,7 @@ jobs:
             throw "Missing Windows artifacts: $($missing -join ', ')"
           }
 
-      - name: Sign Windows installers
+      - name: Sign Windows setup
         if: inputs.platform == 'win32' && env.HAS_SIGNING_KEYS == 'true'
         shell: pwsh
         run: |
@@ -289,8 +221,8 @@ jobs:
             Select-Object -First 1
           if (-not $signtool) { throw "signtool.exe not found under $sdkRoot" }
 
-          $targets = Get-ChildItem artifacts -File | Where-Object { $_.Extension -in '.exe', '.msi', '.msix' }
-          if (-not $targets) { throw 'No installer artifacts found to sign' }
+          $targets = Get-ChildItem artifacts -File | Where-Object { $_.Extension -in '.exe' }
+          if (-not $targets) { throw 'No Windows setup executable found to sign' }
 
           foreach ($file in $targets) {
             & $signtool sign /fd sha256 /f $env:SIGNING_PFX_PATH /p $env:SIGNING_PFX_PASSWORD $file.FullName
@@ -575,5 +507,178 @@ jobs:
         with:
           name: snap-src-linux-${{ inputs.arch }}
           path: snap-src.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # MSI / MSIX 单独成 job：从 build job 上传的 zip 里还原已签名的客户端再打包。
+  # 拆分不会缩短发版总时长（Windows 不是关键路径），但把「改安装包」的反馈回路
+  # 从整条 Windows 构建缩短到只需要重跑本 job（GitHub 支持只重跑失败的 job）。
+  installers:
+    name: Package Windows installers (${{ inputs.arch }})
+    if: inputs.platform == 'win32'
+    needs: build
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 120
+    env:
+      VERSION: ${{ inputs.version }}
+      VSCODE_ARCH: ${{ inputs.arch }}
+      HAS_SIGNING_KEYS: ${{ secrets.SIGNATURE_KEYS != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          # build/npm/dirs.ts 里包含子模块 extensions/minecraft-workbench，
+          # node_modules 缓存键要读它的 package-lock.json
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # 本 job 只需要运行 gulp 打包任务，不需要编译产物（out/），也不该重付一次
+      # 约 11 分钟的 npm ci。先复用仓库已有的 node_modules 缓存（PR / main 的
+      # pr-node-modules 会预热），命中时直接解包；未命中才安装并把结果存回缓存。
+      - name: Restore node_modules cache
+        id: node-modules-cache
+        uses: ./.github/actions/restore-node-modules
+        with:
+          key-prefix: node_modules-windows
+          key-args: "win32 ${{ inputs.arch }} $(node -p process.arch)"
+
+      - name: Install dependencies
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci
+
+      - name: Save node_modules cache
+        if: steps.node-modules-cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/save-node-modules
+
+      - name: Download Windows client
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ inputs.platform }}-${{ inputs.arch }}
+          path: staging
+
+      # zip 就是 build job 里已签名的客户端（VSCode-win32-<arch>），
+      # 解压回 buildPath() 期望的位置（仓库目录的同级目录）。
+      - name: Restore Windows client
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Get-ChildItem staging -Filter '*.zip' -File | Select-Object -First 1
+          if (-not $zip) { throw 'Client zip not found in the release artifacts' }
+
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'client'
+          New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+          7z.exe x $zip.FullName "-o$extractRoot" -y
+          if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
+
+          $source = Join-Path $extractRoot "VSCode-win32-$env:VSCODE_ARCH"
+          if (-not (Test-Path (Join-Path $source 'BlockIDE.exe'))) {
+            # 兜底：万一 zip 里没有顶层目录，就在解压结果里找含主程序的目录
+            $candidate = Get-ChildItem $extractRoot -Directory |
+              Where-Object { Test-Path (Join-Path $_.FullName 'BlockIDE.exe') } |
+              Select-Object -First 1
+            if (-not $candidate) { throw "Client not found in $($zip.Name)" }
+            $source = $candidate.FullName
+          }
+
+          Move-Item $source (Join-Path (Split-Path $env:GITHUB_WORKSPACE) "VSCode-win32-$env:VSCODE_ARCH")
+
+      # MSIX 的 Publisher 必须取自签名证书，和客户端 job 共用同一份逻辑
+      - name: Prepare signing certificate (Windows)
+        if: env.HAS_SIGNING_KEYS == 'true'
+        uses: ./.github/actions/prepare-windows-signing
+        with:
+          signing-key: ${{ secrets.SIGNATURE_KEYS }}
+          signing-crt: ${{ vars.SIGNATURE_CRT }}
+          signing-key-password: ${{ secrets.SIGNATURE_KEYS_PASSWORD }}
+
+      - name: Package MSI / MSIX
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          $arch = $env:VSCODE_ARCH
+          $version = $env:VERSION
+
+          # $ErrorActionPreference 只对 cmdlet 生效；npm/gulp 这类原生进程失败时脚本会继续往下跑，
+          # v1.0.2 的 MSIX 就是这样在失败后被静默跳过、只发布了 3 个安装包的。
+          function Invoke-Gulp([string]$name) {
+            npm run gulp $name
+            if ($LASTEXITCODE -ne 0) { throw "gulp $name failed with exit code $LASTEXITCODE" }
+          }
+
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "choco install wixtoolset failed with exit code $LASTEXITCODE" }
+          }
+
+          $wixDirectory = Get-ChildItem 'C:\Program Files (x86)' -Directory -Filter 'WiX Toolset v3*' -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $wixDirectory) {
+            throw 'WiX Toolset v3 is required to build the MSI'
+          }
+          $env:WIX_BIN = Join-Path $wixDirectory.FullName 'bin'
+          $env:PATH = "$env:WIX_BIN;$env:PATH"
+
+          $sdkDirectory = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+          if (-not $sdkDirectory) {
+            throw 'Windows SDK is required to build the MSIX'
+          }
+          $env:PATH = "$(Join-Path $sdkDirectory.FullName 'x64');$env:PATH"
+
+          Invoke-Gulp "vscode-win32-$arch-msi"
+          Invoke-Gulp "vscode-win32-$arch-msix"
+
+          Copy-Item ".build\win32-$arch\msi\BlockIDE-*-$arch.msi" "artifacts\BlockIDE-win32-$arch-$version.msi"
+          Copy-Item ".build\win32-$arch\msix\BlockIDE-*-$arch.msix" "artifacts\BlockIDE-win32-$arch-$version.msix"
+
+          # 上传前确认两个安装包都在，缺任何一个都说明有步骤被静默跳过
+          $expected = foreach ($extension in 'msi', 'msix') {
+            "artifacts\BlockIDE-win32-$arch-$version.$extension"
+          }
+          $missing = @($expected | Where-Object { -not (Test-Path $_) -or (Get-Item $_).Length -eq 0 })
+          if ($missing.Count -gt 0) {
+            throw "Missing Windows installers: $($missing -join ', ')"
+          }
+
+      - name: Sign Windows installers
+        if: env.HAS_SIGNING_KEYS == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
+          # bin 下同时存在 x86/x64 等目录，只按版本号目录排序，避免选中 x86 拼出错路径
+          $signtool = Get-ChildItem $sdkRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName 'x64\signtool.exe' } |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found under $sdkRoot" }
+
+          $targets = Get-ChildItem artifacts -File | Where-Object { $_.Extension -in '.msi', '.msix' }
+          if (-not $targets) { throw 'No Windows installers found to sign' }
+
+          foreach ($file in $targets) {
+            & $signtool sign /fd sha256 /f $env:SIGNING_PFX_PATH /p $env:SIGNING_PFX_PASSWORD $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($file.Name)" }
+          }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ inputs.platform }}-installers-${{ inputs.arch }}
+          path: artifacts/*
           if-no-files-found: error
           retention-days: 7

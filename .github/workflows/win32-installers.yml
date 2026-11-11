@@ -17,6 +17,7 @@ on:
       - 'product.json'
       - 'package.json'
       - 'package-lock.json'
+      - '.github/actions/prepare-windows-signing/**'
       - '.github/workflows/build.yml'
       - '.github/workflows/win32-installers.yml'
   push:
@@ -31,6 +32,7 @@ on:
       - 'product.json'
       - 'package.json'
       - 'package-lock.json'
+      - '.github/actions/prepare-windows-signing/**'
       - '.github/workflows/build.yml'
       - '.github/workflows/win32-installers.yml'
   workflow_dispatch:
