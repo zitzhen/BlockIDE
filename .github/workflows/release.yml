@@ -155,6 +155,7 @@ jobs:
             'BlockIDE-win32-x64-*.exe'
             'BlockIDE-win32-x64-*.msi'
             'BlockIDE-win32-x64-*.msix'
+            'BlockIDE-win32-x64-*-unsigned.msix'
             'BlockIDE-win32-x64-*.zip'
           )
 

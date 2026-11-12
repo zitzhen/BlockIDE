@@ -671,6 +671,13 @@ jobs:
             throw "Missing Windows installers: $($missing -join ', ')"
           }
 
+          # 发行版同时提供已签名和未签名的 MSIX（便于用户自行签名/离线分发）。
+          # 未签名的那份先放到 artifacts 之外，避免被签名步骤就地改写。
+          if ($env:HAS_SIGNING_KEYS -eq 'true') {
+            New-Item -ItemType Directory -Path unsigned -Force | Out-Null
+            Copy-Item "artifacts\BlockIDE-win32-$arch-$version.msix" "unsigned\BlockIDE-win32-$arch-$version-unsigned.msix"
+          }
+
       - name: Sign Windows installers
         if: env.HAS_SIGNING_KEYS == 'true'
         shell: pwsh
@@ -694,6 +701,17 @@ jobs:
             & $signtool sign /fd sha256 /f $env:SIGNING_PFX_PATH /p $env:SIGNING_PFX_PASSWORD $file.FullName
             if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($file.Name)" }
           }
+
+      # 签名会就地改写 MSIX 文件，未签名的那份在签名完成后才放回 artifacts
+      - name: Add unsigned MSIX
+        if: env.HAS_SIGNING_KEYS == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $copies = @(Get-ChildItem unsigned -Filter '*-unsigned.msix' -File -ErrorAction SilentlyContinue)
+          if ($copies.Count -ne 1) { throw "Expected exactly one unsigned MSIX copy, found $($copies.Count)" }
+          Move-Item $copies[0].FullName artifacts
+          Write-Host "Unsigned MSIX: $($copies[0].Name)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
