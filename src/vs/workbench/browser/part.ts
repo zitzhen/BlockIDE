@@ -220,6 +220,7 @@ export abstract class Part<MementoType extends object = object> extends Componen
 		}
 
 		this.parent.appendChild(footerContainer);
+		this.parent.classList.add('has-footer');
 		footerContainer.classList.add('header-or-footer');
 		footerContainer.classList.add('footer');
 
@@ -241,6 +242,7 @@ export abstract class Part<MementoType extends object = object> extends Componen
 		if (this.footerArea) {
 			this.footerArea.remove();
 			this.footerArea = undefined;
+			this.parent?.classList.remove('has-footer');
 			this.partLayout?.setFooterVisibility(false);
 			this.relayout();
 		}
