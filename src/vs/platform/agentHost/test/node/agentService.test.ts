@@ -45450,7 +45450,6 @@ suite('AgentService (node dispatcher)', () => {
 			const sourceDir = URI.file('/source/repo');
 			const worktreeDir = URI.file('/source/repo.worktrees/feature');
 			const gitStateCalls: Array<{ resource: string; baseBranch: string | undefined }> = [];
-			const secondGitStateCall = new DeferredPromise<void>();
 			const diffCalls: string[] = [];
 			const gitService = createNoopGitService();
 			gitService.getRepositoryRoot = async () => sourceDir;
@@ -45460,9 +45459,6 @@ suite('AgentService (node dispatcher)', () => {
 			gitService.getBranches = async () => [{ ref: 'refs/heads/main', name: 'main', kind: GitRefType.Head }];
 			gitService.getSessionGitState = async (resource, baseBranch) => {
 				gitStateCalls.push({ resource: resource.toString(), baseBranch });
-				if (gitStateCalls.length === 2) {
-					secondGitStateCall.complete();
-				}
 				return { branchName: 'feature', baseBranchName: 'main', uncommittedChanges: 1 };
 			};
 			gitService.computeSessionFileDiffs = async resource => {
@@ -45504,9 +45500,6 @@ suite('AgentService (node dispatcher)', () => {
 					&& uncommittedState.operations.some(operation => operation.id === 'discard-changes');
 			}, 'the uncommitted changeset should be ready with its operations');
 
-			// The base branch now comes from the store, so the second Git state refresh may land after the uncommitted state is ready.
-			await secondGitStateCall.p;
-
 			const sourceFile = URI.joinPath(sourceDir, 'dirty.ts').toString();
 			const uncommittedStateBeforeMaterialization = getStateManager(localService).getChangesetState(uncommittedChangeset);
 			const beforeMaterialization = {
@@ -45534,8 +45527,8 @@ suite('AgentService (node dispatcher)', () => {
 			}, {
 				beforeMaterialization: {
 					workingDirectory: sourceDir.toString(),
+					// The session and its default chat refresh the same folder together and share one read of it.
 					gitStateCalls: [
-						{ resource: sourceDir.toString(), baseBranch: undefined },
 						{ resource: sourceDir.toString(), baseBranch: undefined },
 					],
 					diffCalls: [sourceDir.toString()],
@@ -45967,13 +45960,9 @@ suite('AgentService (node dispatcher)', () => {
 
 		const workingDirectory = URI.file('/workspace');
 		const gitCalls: string[] = [];
-		const secondGitStateCall = new DeferredPromise<void>();
 		const gitService = createNoopGitService();
 		gitService.getSessionGitState = async resource => {
 			gitCalls.push(resource.toString());
-			if (gitCalls.length === 2) {
-				secondGitStateCall.complete();
-			}
 			return {
 				hasGitHubRemote: false,
 				branchName: 'main',
@@ -45998,7 +45987,6 @@ suite('AgentService (node dispatcher)', () => {
 		const defaultChat = buildDefaultChatUri(workspaceSession);
 		const uncommittedUri = buildUncommittedChangesetUri(defaultChat);
 		localService.addSubscriber(URI.parse(uncommittedUri), 'client-1');
-		await secondGitStateCall.p;
 		await waitForCondition(getStateManager(localService).onDidEmitEnvelope, () => getStateManager(localService).getChangesetState(uncommittedUri)?.operations?.some(operation => operation.id === 'commit') === true, 'the uncommitted changeset should offer a commit');
 
 		const workspaceState = getStateManager(localService).getSessionState(workspaceSession.toString());
@@ -46013,7 +46001,8 @@ suite('AgentService (node dispatcher)', () => {
 			lifecycle: SessionLifecycle.Creating,
 			sessionChangesets: [],
 			chatChangesets: ['uncommitted'],
-			gitCalls: [workingDirectory.toString(), workingDirectory.toString()],
+			// The session and its default chat refresh the same folder together and share one read of it.
+			gitCalls: [workingDirectory.toString()],
 			hasCommit: true,
 		});
 		localService.unsubscribe(URI.parse(uncommittedUri), 'client-1');
