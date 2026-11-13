@@ -85,7 +85,7 @@
 ![screenshot](https://hediet-screenshots.azurewebsites.net/images/f530eaa95aa2ca7e7a6f4c3b9a7df82becdba7bd536383e04b1a722070f2f3ec)
 
 #### editor/inlineChatZoneWidget/InlineChatZoneWidget/Light
-![screenshot](https://hediet-screenshots.azurewebsites.net/images/149a3762c5eef80f2a1c74385c9d45871821de012a9cc36ecaa8d22858ac1ad2)
+![screenshot](https://hediet-screenshots.azurewebsites.net/images/a50c6b1aa065a2b53a2e70cc226298c36bd04617f3163ffe11892fba9b141cf1)
 
 #### editor/inlineChatZoneWidget/InlineChatZoneWidgetTerminated/Light
 ![screenshot](https://hediet-screenshots.azurewebsites.net/images/8d8b39f9a3dd85453ad1594df888c7ac1908d5c7ed80a5b15238d818a89aeb1b)
