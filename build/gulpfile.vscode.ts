@@ -533,6 +533,18 @@ function patchWin32DependenciesTask(destinationFolderName: string) {
 			const basename = path.basename(dep);
 			const fullPath = path.join(cwd, dep);
 
+			// Extensions may ship native binaries for every platform in the same
+			// package (e.g. clipboard.darwin-x64.node). rcedit only understands PE
+			// files, so skip anything that is not a Windows binary.
+			const handle = await fs.promises.open(fullPath, 'r');
+			const magic = Buffer.alloc(2);
+			const { bytesRead } = await handle.read(magic, 0, 2, 0);
+			await handle.close();
+			if (bytesRead !== 2 || magic.toString('latin1') !== 'MZ') {
+				console.log(`Skipping non-PE binary (rcedit cannot patch it): ${dep}`);
+				return;
+			}
+
 			await stripAuthenticodeSignature(fullPath);
 			await rcedit(fullPath, {
 				'file-version': baseVersion,

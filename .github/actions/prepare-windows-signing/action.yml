@@ -1,0 +1,77 @@
+name: Prepare Windows signing certificate
+description: >-
+  用 secrets.SIGNATURE_KEYS（PEM 私钥）和 vars.SIGNATURE_CRT（PEM 证书）合成一个临时 PFX，
+  并把 PFX 路径、口令以及 MSIX 用的 Publisher 写入 GITHUB_ENV。
+
+  由 build.yml 的客户端构建 job 和安装包 job 共用，保证两边的签名与 Publisher 逻辑只有一份。
+
+inputs:
+  signing-key:
+    description: PEM 私钥，来自 secrets.SIGNATURE_KEYS
+    required: true
+  signing-crt:
+    description: PEM 证书，来自 vars.SIGNATURE_CRT
+    required: true
+  signing-key-password:
+    description: 私钥口令，通常留空
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare signing certificate (Windows)
+      shell: pwsh
+      env:
+        SIGNING_KEY: ${{ inputs.signing-key }}
+        SIGNING_CRT: ${{ inputs.signing-crt }}
+        SIGNATURE_KEYS_PASSWORD: ${{ inputs.signing-key-password }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        if (-not $env:SIGNING_CRT) { throw 'SIGNATURE_CRT variable is not set; it must contain the PEM certificate' }
+
+        $keyPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.key'
+        $certPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.crt'
+        [System.IO.File]::WriteAllText($keyPath, $env:SIGNING_KEY)
+        [System.IO.File]::WriteAllText($certPath, $env:SIGNING_CRT)
+        if (-not (Select-String -Path $certPath -Pattern 'BEGIN CERTIFICATE' -Quiet)) {
+          throw 'SIGNATURE_CRT does not contain a BEGIN CERTIFICATE block'
+        }
+
+        $openssl = (Get-Command openssl.exe -ErrorAction SilentlyContinue).Source
+        if (-not $openssl) {
+          $gitOpenSsl = Join-Path $env:ProgramFiles 'Git\usr\bin\openssl.exe'
+          if (Test-Path $gitOpenSsl) { $openssl = $gitOpenSsl }
+        }
+        if (-not $openssl) { throw 'openssl.exe not found, cannot build the PFX from SIGNATURE_KEYS/SIGNATURE_CRT' }
+
+        $password = [System.Guid]::NewGuid().ToString('N')
+        $pfxPath = Join-Path $env:RUNNER_TEMP 'blockide-signing.pfx'
+        $keyArgs = @()
+        if ($env:SIGNATURE_KEYS_PASSWORD) { $keyArgs = @('-passin', "pass:$env:SIGNATURE_KEYS_PASSWORD") }
+
+        & $openssl pkcs12 -export -inkey $keyPath -in $certPath -out $pfxPath -passout "pass:$password" -name BlockIDE @keyArgs
+        if ($LASTEXITCODE -ne 0) { throw "openssl pkcs12 exited with code $LASTEXITCODE" }
+
+        # MSIX 的 Publisher 必须与签名证书的 Subject 一致，否则签出来的包无法安装。
+        # 优先从 PFX 里读 Subject：它正是 Windows 比较时使用的规范形式
+        # （'CN=..., OU=..., O=..., C=CN'）。若改用 openssl 的 RFC2253 输出
+        # （'CN=...,OU=...,O=...'，逗号后没有空格），MakeAppx 的清单校验会直接拒绝，
+        # 报 C00CE169 / 'Publisher ... failed to parse'。
+        $publisher = $null
+        try {
+          $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, $password)
+          try { $publisher = $certificate.Subject } finally { $certificate.Dispose() }
+        } catch {
+          Write-Warning "Cannot read the subject from the PFX ($($_.Exception.Message)); falling back to openssl"
+          $subject = ((& $openssl x509 -in $certPath -noout -subject -nameopt RFC2253) -join '') -replace '^subject\s*=\s*', ''
+          # RFC2253 用 ',' 分隔，MakeAppx 要求 ',' + 空格
+          $publisher = $subject -replace ',(?=[^,=]+=)', ', '
+        }
+        if (-not $publisher) { throw 'Failed to read the certificate subject for the MSIX publisher' }
+
+        "SIGNING_PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        "SIGNING_PFX_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        "BLOCKIDE_MSIX_PUBLISHER=$publisher" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        Write-Host "Signing certificate subject: $publisher"

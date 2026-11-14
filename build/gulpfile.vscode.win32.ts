@@ -182,6 +182,18 @@ function spawnTool(executable: string, args: string[], cwd: string): Promise<voi
 	});
 }
 
+/**
+ * Runs a tool and resolves with its exit code; only spawn failures reject.
+ * Used for tools that encode warnings in the exit code (light.exe uses 204 for ICE warnings).
+ */
+function spawnToolCapturingExitCode(executable: string, args: string[], cwd: string): Promise<number> {
+	return new Promise((resolve, reject) => {
+		cp.spawn(executable, args, { cwd, stdio: ['ignore', 'inherit', 'inherit'] })
+			.on('error', reject)
+			.on('exit', code => resolve(code ?? -1));
+	});
+}
+
 function findWixTool(name: string): string {
 	const directories = [
 		process.env['WIX_BIN'],
@@ -276,10 +288,22 @@ function buildWin32Msi(arch: string): task.CallbackTask {
 			], outputPath);
 
 			const msiPath = path.join(outputPath, `${product.nameShort}-${normalizeMsiVersion(pkg.version)}-${arch}.msi`);
-			await spawnTool(findWixTool('light.exe'), [
+			// light.exe encodes ICE warnings in its exit code (for example 204) even though
+			// the package was produced successfully. Treat an existing package as success so
+			// warnings are not reported as build failures (and real failures stay visible).
+
+			const lightExitCode = await spawnToolCapturingExitCode(findWixTool('light.exe'), [
 				wixobjPath,
 				'-o', msiPath
 			], outputPath);
+
+			if (!fs.existsSync(msiPath) || fs.statSync(msiPath).size === 0) {
+				throw new Error(`light.exe exited with code: ${lightExitCode}`);
+			}
+
+			if (lightExitCode !== 0) {
+				console.warn(`light.exe reported warnings (exit code ${lightExitCode}); the MSI was still produced.`);
+			}
 		})().then(() => cb?.(), err => cb?.(err instanceof Error ? err : new Error(String(err))));
 	};
 }

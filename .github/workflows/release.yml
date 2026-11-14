@@ -140,6 +140,35 @@ jobs:
       - name: List release assets
         run: ls -lh dist
 
+      # 发布前逐项核对产物清单：缺一个就中断，避免像 v1.0.2 那样静默发出少文件的版本
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(
+            'BlockIDE-darwin-arm64-*.dmg'
+            'BlockIDE-darwin-arm64-*.zip'
+            'BlockIDE-linux-x64-*.deb'
+            'BlockIDE-linux-x64-*.rpm'
+            'BlockIDE-linux-x64-*.snap'
+            'BlockIDE-linux-x64-*.tar.gz'
+            'BlockIDE-win32-x64-*.exe'
+            'BlockIDE-win32-x64-*.msi'
+            'BlockIDE-win32-x64-*.msix'
+            'BlockIDE-win32-x64-*-unsigned.msix'
+            'BlockIDE-win32-x64-*.zip'
+          )
+
+          missing=()
+          for pattern in "${expected[@]}"; do
+            compgen -G "dist/${pattern}" > /dev/null || missing+=("${pattern}")
+          done
+
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf '::error::Missing release assets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
       # 默认创建草稿发布；draft / prerelease 由上游 meta job 决定
       - name: Create GitHub release
         shell: bash
