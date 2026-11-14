@@ -16,7 +16,7 @@ import { URI } from '../../../base/common/uri.js';
 import { IHeaders, IRequestContext, IRequestOptions, isOfflineError } from '../../../base/parts/request/common/request.js';
 import { IConfigurationService } from '../../configuration/common/configuration.js';
 import { IEnvironmentService } from '../../environment/common/environment.js';
-import { getTargetPlatform, IExtensionGalleryService, IExtensionIdentifier, IExtensionInfo, IGalleryExtension, IGalleryExtensionAsset, IGalleryExtensionAssets, IGalleryExtensionVersion, InstallOperation, IQueryOptions, IExtensionsControlManifest, isNotWebExtensionInWebTargetPlatform, isTargetPlatformCompatible, ITranslation, SortOrder, StatisticType, toTargetPlatform, WEB_EXTENSION_TAG, IExtensionQueryOptions, IDeprecationInfo, ISearchPrefferedResults, ExtensionGalleryError, ExtensionGalleryErrorCode, IProductVersion, IAllowedExtensionsService, EXTENSION_IDENTIFIER_REGEX, SortBy, FilterType, MaliciousExtensionInfo, ExtensionRequestsTimeoutConfigKey, IExtensionBlockingInfo, ExtensionBlockingOrigin } from './extensionManagement.js';
+import { getTargetPlatform, IExtensionGalleryService, IExtensionIdentifier, IExtensionInfo, IGalleryExtension, IGalleryExtensionAsset, IGalleryExtensionAssets, IGalleryExtensionVersion, InstallOperation, IQueryOptions, IExtensionsControlManifest, isNotWebExtensionInWebTargetPlatform, isTargetPlatformCompatible, ITranslation, SortOrder, StatisticType, toTargetPlatform, WEB_EXTENSION_TAG, IExtensionQueryOptions, IDeprecationInfo, ISearchPrefferedResults, ExtensionGalleryError, ExtensionGalleryErrorCode, IProductVersion, IAllowedExtensionsService, EXTENSION_IDENTIFIER_REGEX, SortBy, FilterType, MaliciousExtensionInfo, ExtensionRequestsTimeoutConfigKey, IExtensionBlockingInfo, ExtensionBlockingOrigin, getCompatibilityProductVersion } from './extensionManagement.js';
 import { adoptToGalleryExtensionId, areSameExtensions, getGalleryExtensionId, getGalleryExtensionTelemetryData } from './extensionManagementUtil.js';
 import { IExtensionManifest, TargetPlatform } from '../../extensions/common/extensions.js';
 import { isEngineValid } from '../../extensions/common/extensionValidator.js';
@@ -676,7 +676,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 		this.extensionsControlUrl = productService.extensionsGallery?.controlUrl;
 		this.unpkgResourceApi = productService.extensionsGallery?.extensionUrlTemplate;
 		this.commonHeadersPromise = resolveMarketplaceHeaders(
-			productService.version,
+			getCompatibilityProductVersion(productService).version,
 			productService,
 			this.environmentService,
 			this.configurationService,
@@ -789,7 +789,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 				includePreRelease,
 				versions,
 				compatible: !!options.compatible,
-				productVersion: options.productVersion ?? { version: this.productService.version, date: this.productService.date },
+				productVersion: options.productVersion ?? getCompatibilityProductVersion(this.productService),
 				includeBlockedVersions: options.includeBlockedVersions,
 				isQueryForReleaseVersionFromPreReleaseVersion
 			},
@@ -937,10 +937,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 			{
 				targetPlatform,
 				compatible: !!options.compatible,
-				productVersion: options.productVersion ?? {
-					version: this.productService.version,
-					date: this.productService.date
-				},
+				productVersion: options.productVersion ?? getCompatibilityProductVersion(this.productService),
 				version: extensionInfo.preRelease ? VersionKind.Prerelease : VersionKind.Release
 			}, allTargetPlatforms);
 
@@ -957,10 +954,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 			{
 				targetPlatform,
 				compatible: !!options.compatible,
-				productVersion: options.productVersion ?? {
-					version: this.productService.version,
-					date: this.productService.date
-				},
+				productVersion: options.productVersion ?? getCompatibilityProductVersion(this.productService),
 				version: VersionKind.Release
 			}, allTargetPlatforms);
 
@@ -980,10 +974,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 					{
 						targetPlatform,
 						compatible: false,
-						productVersion: options.productVersion ?? {
-							version: this.productService.version,
-							date: this.productService.date
-						},
+						productVersion: options.productVersion ?? getCompatibilityProductVersion(this.productService),
 						version: VersionKind.Prerelease
 					}, allTargetPlatforms);
 
@@ -1000,7 +991,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 		return prereleaseVersion ?? releaseVersion ?? null;
 	}
 
-	async getCompatibleExtension(extension: IGalleryExtension, includePreRelease: boolean, targetPlatform: TargetPlatform, productVersion: IProductVersion = { version: this.productService.version, date: this.productService.date }): Promise<IGalleryExtension | null> {
+	async getCompatibleExtension(extension: IGalleryExtension, includePreRelease: boolean, targetPlatform: TargetPlatform, productVersion: IProductVersion = getCompatibilityProductVersion(this.productService)): Promise<IGalleryExtension | null> {
 		if (isNotWebExtensionInWebTargetPlatform(extension.allTargetPlatforms, targetPlatform)) {
 			return null;
 		}
@@ -1024,7 +1015,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 		return result[0] ?? null;
 	}
 
-	async isExtensionCompatible(extension: IGalleryExtension, includePreRelease: boolean, targetPlatform: TargetPlatform, productVersion: IProductVersion = { version: this.productService.version, date: this.productService.date }): Promise<boolean> {
+	async isExtensionCompatible(extension: IGalleryExtension, includePreRelease: boolean, targetPlatform: TargetPlatform, productVersion: IProductVersion = getCompatibilityProductVersion(this.productService)): Promise<boolean> {
 		return this.isValidVersion(
 			{
 				id: extension.identifier.id,
@@ -1213,7 +1204,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 		}
 
 		const runQuery = async (query: Query, token: CancellationToken) => {
-			const { extensions, total } = await this.queryGalleryExtensions(query, { targetPlatform: CURRENT_TARGET_PLATFORM, compatible: false, includePreRelease: !!options.includePreRelease, productVersion: options.productVersion ?? { version: this.productService.version, date: this.productService.date } }, extensionGalleryManifest, token);
+			const { extensions, total } = await this.queryGalleryExtensions(query, { targetPlatform: CURRENT_TARGET_PLATFORM, compatible: false, includePreRelease: !!options.includePreRelease, productVersion: options.productVersion ?? getCompatibilityProductVersion(this.productService) }, extensionGalleryManifest, token);
 
 			const result: IGalleryExtension[] = [];
 			let defaultChatAgentExtension: IGalleryExtension | undefined;
@@ -1871,7 +1862,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 		}
 
 		const versions: IRawGalleryExtensionVersion[] = [];
-		const productVersion = { version: this.productService.version, date: this.productService.date };
+		const productVersion = getCompatibilityProductVersion(this.productService);
 		await Promise.all(galleryExtensions[0].versions.map(async (version) => {
 			try {
 				if (
@@ -2017,7 +2008,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 			}
 			if (result.migrateToPreRelease) {
 				for (const [unsupportedPreReleaseExtensionId, preReleaseExtensionInfo] of Object.entries(result.migrateToPreRelease)) {
-					if (!preReleaseExtensionInfo.engine || isEngineValid(preReleaseExtensionInfo.engine, this.productService.version, this.productService.date)) {
+					if (!preReleaseExtensionInfo.engine || isEngineValid(preReleaseExtensionInfo.engine, getCompatibilityProductVersion(this.productService).version, this.productService.date)) {
 						deprecated[unsupportedPreReleaseExtensionId.toLowerCase()] = {
 							disallowInstall: true,
 							extension: {

@@ -26,7 +26,8 @@ import {
 	ExtensionManagementErrorCode,
 	MaliciousExtensionInfo,
 	shouldRequireRepositorySignatureFor,
-	IGalleryExtensionVersion
+	IGalleryExtensionVersion,
+	getCompatibilityProductVersion
 } from '../../../../platform/extensionManagement/common/extensionManagement.js';
 import { IWorkbenchExtensionEnablementService, EnablementState, IExtensionManagementServerService, IExtensionManagementServer, IWorkbenchExtensionManagementService, IResourceExtension } from '../../../services/extensionManagement/common/extensionManagement.js';
 import { getGalleryExtensionTelemetryData, getLocalExtensionTelemetryData, areSameExtensions, groupByExtension, getGalleryExtensionId, findMatchingMaliciousEntry } from '../../../../platform/extensionManagement/common/extensionManagementUtil.js';
@@ -1558,7 +1559,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 		const invalidExtensions = this.local.filter(e => e.enablementState === EnablementState.DisabledByInvalidExtension && !e.isWorkspaceScoped);
 		if (invalidExtensions.length) {
 			if (invalidExtensions.some(e => e.local && e.local.manifest.engines?.vscode &&
-				!isEngineValid(e.local.manifest.engines.vscode, this.productService.version, this.productService.date)
+				!isEngineValid(e.local.manifest.engines.vscode, getCompatibilityProductVersion(this.productService).version, this.productService.date)
 			)) {
 				computedNotificiations.push({
 					message: nls.localize('incompatibleExtensions', "Some extensions are disabled due to version incompatibility. Review and update them."),
@@ -2316,7 +2317,7 @@ export class ExtensionsWorkbenchService extends Disposable implements IExtension
 	}
 
 	private getProductCurrentVersion(): IProductVersion {
-		return { version: this.productService.version, date: this.productService.date };
+		return getCompatibilityProductVersion(this.productService);
 	}
 
 	private getProductUpdateVersion(): IProductVersion | undefined {

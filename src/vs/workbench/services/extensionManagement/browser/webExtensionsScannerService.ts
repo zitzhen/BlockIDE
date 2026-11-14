@@ -15,7 +15,7 @@ import { Queue } from '../../../../base/common/async.js';
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
-import { IExtensionGalleryService, IExtensionInfo, IGalleryExtension, IGalleryMetadata, Metadata } from '../../../../platform/extensionManagement/common/extensionManagement.js';
+import { getCompatibilityProductVersion, IExtensionGalleryService, IExtensionInfo, IGalleryExtension, IGalleryMetadata, Metadata } from '../../../../platform/extensionManagement/common/extensionManagement.js';
 import { areSameExtensions, getGalleryExtensionId, getExtensionId, isMalicious } from '../../../../platform/extensionManagement/common/extensionManagementUtil.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { ITranslations, localizeManifest } from '../../../../platform/extensionManagement/common/extensionNls.js';
@@ -767,7 +767,7 @@ export class WebExtensionsScannerService extends Disposable implements IWebExten
 
 		const uuid = (<IGalleryMetadata | undefined>webExtension.metadata)?.id;
 
-		validations.push(...validateExtensionManifest(this.productService.version, this.productService.date, webExtension.location, manifest, false));
+		validations.push(...validateExtensionManifest(getCompatibilityProductVersion(this.productService).version, this.productService.date, webExtension.location, manifest, false));
 		let isValid = true;
 		for (const [severity, message] of validations) {
 			if (severity === Severity.Error) {

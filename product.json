@@ -2,6 +2,7 @@
 	"nameShort": "BlockIDE",
 	"nameLong": "BlockIDE",
 	"applicationName": "blockide",
+	"extensionCompatibilityVersion": "1.145.2",
 	"dataFolderName": ".blockide",
 	"sharedDataFolderName": ".blockide-shared",
 	"win32MutexName": "blockide",
@@ -245,6 +246,40 @@
 	"builtInExtensionsEnabledWithAutoUpdates": [
 		"GitHub.copilot-chat"
 	],
+	"extensionsGallery": {
+		"nlsBaseUrl": "https://www.vscode-unpkg.net/_lp/",
+		"serviceUrl": "https://marketplace.visualstudio.com/_apis/public/gallery",
+		"itemUrl": "https://marketplace.visualstudio.com/items",
+		"publisherUrl": "https://marketplace.visualstudio.com/publishers",
+		"resourceUrlTemplate": "https://{publisher}.vscode-unpkg.net/{publisher}/{name}/{version}/{path}",
+		"extensionUrlTemplate": "https://www.vscode-unpkg.net/_gallery/{publisher}/{name}/latest",
+		"controlUrl": "https://main.vscode-cdn.net/extensions/marketplace.json",
+		"mcpUrl": "https://main.vscode-cdn.net/mcp/servers.json",
+		"accessSKUs": [
+			"copilot_enterprise_seat",
+			"copilot_enterprise_seat_quota",
+			"copilot_enterprise_seat_multi_quota",
+			"copilot_enterprise_seat_assignment",
+			"copilot_enterprise_seat_assignment_quota",
+			"copilot_enterprise_seat_assignment_multi_quota",
+			"copilot_enterprise_trial_seat",
+			"copilot_enterprise_trial_seat_quota",
+			"copilot_for_business_seat",
+			"copilot_for_business_seat_quota",
+			"copilot_for_business_seat_multi_quota",
+			"copilot_for_business_seat_assignment",
+			"copilot_for_business_seat_assignment_quota",
+			"copilot_for_business_seat_assignment_multi_quota",
+			"copilot_for_business_trial_seat",
+			"copilot_for_business_trial_seat_quota"
+		],
+		"accessScopes": [
+			"openid",
+			"profile",
+			"email",
+			"offline_access"
+		]
+	},
 	"sessionsWindowAllowedExtensions": [],
 	"voiceWsUrl": "wss://falcon-caas.mai.microsoft.com/voice-code/api/v1/realtime/voice"
 }

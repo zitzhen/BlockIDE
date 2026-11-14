@@ -16,6 +16,7 @@ import { ConfigurationScope, Extensions, IConfigurationRegistry } from '../../co
 import { ExtensionType, IExtension, IExtensionManifest, TargetPlatform } from '../../extensions/common/extensions.js';
 import { FileOperationError, FileOperationResult, IFileService, IFileStat } from '../../files/common/files.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
+import { IProductService } from '../../product/common/productService.js';
 import { Registry } from '../../registry/common/platform.js';
 import { IExtensionGalleryManifest } from './extensionGalleryManifest.js';
 
@@ -38,6 +39,18 @@ export const enum ExtensionInstallSource {
 export interface IProductVersion {
 	readonly version: string;
 	readonly date?: string;
+}
+
+/**
+ * Product version used for extension compatibility checks and Marketplace queries.
+ * Uses {@link IProductConfiguration.extensionCompatibilityVersion} when a product
+ * ships with its own version numbering.
+ */
+export function getCompatibilityProductVersion(productService: IProductService): IProductVersion {
+	return {
+		version: productService.extensionCompatibilityVersion ?? productService.version,
+		date: productService.date
+	};
 }
 
 export function TargetPlatformToString(targetPlatform: TargetPlatform) {
