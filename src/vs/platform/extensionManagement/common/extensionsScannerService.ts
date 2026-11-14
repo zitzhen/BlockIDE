@@ -21,7 +21,7 @@ import Severity from '../../../base/common/severity.js';
 import { URI } from '../../../base/common/uri.js';
 import { localize } from '../../../nls.js';
 import { IEnvironmentService } from '../../environment/common/environment.js';
-import { IProductVersion, Metadata } from './extensionManagement.js';
+import { getCompatibilityProductVersion, IProductVersion, Metadata } from './extensionManagement.js';
 import { areSameExtensions, computeTargetPlatform, getExtensionId, getGalleryExtensionId } from './extensionManagementUtil.js';
 import { ExtensionType, ExtensionIdentifier, IExtensionManifest, TargetPlatform, IExtensionIdentifier, IRelaxedExtensionManifest, UNDEFINED_PUBLISHER, IExtensionDescription, getManifestCacheFileName, ExtensionIdentifierMap, parseEnabledApiProposalNames } from '../../extensions/common/extensions.js';
 import { validateExtensionManifest } from '../../extensions/common/extensionValidator.js';
@@ -521,10 +521,7 @@ export abstract class AbstractExtensionsScannerService extends Disposable implem
 	}
 
 	private getProductVersion(): IProductVersion {
-		return {
-			version: this.productService.version,
-			date: this.productService.date,
-		};
+		return getCompatibilityProductVersion(this.productService);
 	}
 
 }

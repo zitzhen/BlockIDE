@@ -98,6 +98,12 @@ export interface IDictationRuntimeProductConfig {
 
 export interface IProductConfiguration {
 	readonly version: string;
+	/**
+	 * Version reported to the extension Marketplace and used for `engines.vscode`
+	 * compatibility checks. Forks that use their own release numbering can keep
+	 * {@link version} for branding while reporting an upstream VS Code version here.
+	 */
+	readonly extensionCompatibilityVersion?: string;
 	readonly date?: string;
 	readonly quality?: string;
 	readonly commit?: string;

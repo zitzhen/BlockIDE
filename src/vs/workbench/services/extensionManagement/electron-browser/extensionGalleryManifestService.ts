@@ -12,6 +12,7 @@ import { IConfigurationService } from '../../../../platform/configuration/common
 import { IEnvironmentService } from '../../../../platform/environment/common/environment.js';
 import { IExtensionGalleryManifestService, IExtensionGalleryManifest, ExtensionGalleryServiceUrlConfigKey, ExtensionGalleryAuthProviderConfigKey, ExtensionGalleryManifestStatus } from '../../../../platform/extensionManagement/common/extensionGalleryManifest.js';
 import { ExtensionGalleryManifestService } from '../../../../platform/extensionManagement/common/extensionGalleryManifestService.js';
+import { getCompatibilityProductVersion } from '../../../../platform/extensionManagement/common/extensionManagement.js';
 import { resolveMarketplaceHeaders } from '../../../../platform/externalServices/common/marketplace.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
@@ -92,7 +93,7 @@ export class WorkbenchExtensionGalleryManifestService extends ExtensionGalleryMa
 	) {
 		super(productService);
 		this.commonHeadersPromise = resolveMarketplaceHeaders(
-			productService.version,
+			getCompatibilityProductVersion(productService).version,
 			productService,
 			environmentService,
 			configurationService,
