@@ -178,7 +178,7 @@
     "@eslint/compat": "^2.1.0",
     "@openai/codex": "0.163.0",
     "@playwright/cli": "^0.1.9",
-    "@playwright/test": "1.65.1",
+    "@playwright/test": "1.61.1",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@types/chrome-remote-interface": "^0.33.0",
     "@types/cookie": "^0.3.3",
@@ -263,7 +263,7 @@
     "os-browserify": "^0.3.0",
     "p-all": "^1.0.0",
     "path-browserify": "^1.0.1",
-    "playwright": "1.65.1",
+    "playwright": "1.61.1",
     "rcedit": "^1.1.0",
     "rimraf": "^2.2.8",
     "sinon": "^12.0.1",
@@ -279,6 +279,7 @@
     "yaserver": "^0.4.0"
   },
   "overrides": {
+    "@playwright/browser-chromium": "1.61.1",
     "@typescript-eslint/types": "8.66.0",
     "node-gyp-build": "4.8.1",
     "kerberos@2.1.1": {
