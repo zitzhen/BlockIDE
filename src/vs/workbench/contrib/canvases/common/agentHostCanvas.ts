@@ -16,7 +16,8 @@ import { CanvasReference, CanvasState } from '../../../../platform/agentHost/com
 import { ActionType, type ActionEnvelope } from '../../../../platform/agentHost/common/state/sessionActions.js';
 import { ChatState, ResponsePartKind, StateComponents, ToolCallStatus } from '../../../../platform/agentHost/common/state/sessionState.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { ICanvas, ICanvasContext, ICanvasDefinition, ICanvasDefinitionProvider, ICanvasOpenRequest, ICanvasOwner } from './canvas.js';
+import { ICanvasContext, ICanvasDefinition, ICanvasDefinitionProvider, ICanvasOpenRequest } from './canvas.js';
+import { ICanvas, ICanvasOwner } from '../../../common/canvasReference.js';
 
 export class AgentHostCanvas implements ICanvas {
 	readonly resource: URI;
@@ -24,6 +25,8 @@ export class AgentHostCanvas implements ICanvas {
 	readonly title: string;
 	readonly status: string | undefined;
 	readonly source: URI | undefined;
+	readonly extensionId: string | undefined;
+	readonly canvasId: string | undefined;
 
 	constructor(
 		resource: URI,
@@ -32,6 +35,8 @@ export class AgentHostCanvas implements ICanvas {
 	) {
 		this.resource = resource;
 		this.instanceId = canvas?.instanceId;
+		this.extensionId = canvas?.extensionId;
+		this.canvasId = canvas?.canvasId;
 		this.title = canvas?.title ?? canvas?.extensionName ?? canvas?.canvasId ?? localize('canvas.pendingTitle', "Canvas");
 		this.status = canvas?.status;
 		if (canvas?.url !== undefined) {

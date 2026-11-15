@@ -7,16 +7,11 @@ import fs from 'fs';
 import path from 'path';
 import { sign, type SignOptions } from '@electron/osx-sign';
 import { spawn } from '@malept/cross-spawn-promise';
+import { getElectronVersion } from '../lib/electronVersion.ts';
 
 const root = path.dirname(path.dirname(import.meta.dirname));
 const baseDir = path.dirname(import.meta.dirname);
 const product = JSON.parse(fs.readFileSync(path.join(root, 'product.json'), 'utf8'));
-
-function getElectronVersion(): string {
-	const npmrc = fs.readFileSync(path.join(root, '.npmrc'), 'utf8');
-	const target = /^target="(.*)"$/m.exec(npmrc)![1];
-	return target;
-}
 
 function getEntitlementsForFile(filePath: string): string {
 	if (filePath.includes(' Helper (GPU).app')) {
@@ -124,7 +119,7 @@ async function main(buildDir?: string): Promise<void> {
 		preAutoEntitlements: false,
 		preEmbedProvisioningProfile: false,
 		keychain: getKeychainPath(tempDir),
-		version: getElectronVersion(),
+		version: getElectronVersion(root).electronVersion,
 		identity,
 		// 工作流的“Prepare signing certificate”步骤已经校验过证书链并确认身份可用，
 		// 且 CODESIGN_IDENTITY 传的是证书 SHA-1 指纹。这里跳过 osx-sign 自己的
