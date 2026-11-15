@@ -100,6 +100,8 @@ Changes to the extension itself belong in that repository: commit them there, th
 * Keep changes focused on inherited upstream files where possible, so that syncing with `Code - OSS` stays simple.
 * Refer to the upstream article on [creating pull requests](https://github.com/microsoft/vscode/wiki/How-to-Contribute#pull-requests) and the [coding guidelines](https://github.com/microsoft/vscode/wiki/Coding-Guidelines).
 
+This repository installs its dependencies with [pnpm](https://pnpm.io). Install the version that the `packageManager` field of [package.json](package.json) pins (for example `npm install -g pnpm@<version>`), then run `pnpm install` at the repository root. Installing with npm or yarn is not supported.
+
 ## Thank You
 
 Your contributions to open source, large or small, make great projects like this possible. Thank you for taking the time to contribute.
