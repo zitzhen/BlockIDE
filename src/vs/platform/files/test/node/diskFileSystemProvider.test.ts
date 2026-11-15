@@ -68,7 +68,6 @@ suite('DiskFileSystemProvider', function () {
 		);
 	});
 
-<<<<<<< HEAD
 	test('atomic rename is forwarded through the disk provider channel', async () => {
 		const server = store.add(new TestDiskFileSystemProviderChannel(provider, new NullLogService()));
 		const commands: string[] = [];
