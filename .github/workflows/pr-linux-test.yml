@@ -37,6 +37,10 @@ on:
         description: Reason for selecting the Agent Host test profile
         type: string
         default: Change detection unavailable
+      workspace_image_branch:
+        description: The branch whose workspace images the jobs use (see .github/workflows/workspace_image/README.md)
+        type: string
+        default: main
 
 env:
   NPM_ARCH: x64
@@ -69,16 +73,77 @@ jobs:
       UNIT_TESTS: 'true'
       UNIT_TEST_SUITE: electron
     steps: &steps
+      # A workspace image of main holds a workspace whose dependencies, Electron, Playwright browsers,
+      # and the sysroots and compilers of setup-env.sh are installed, which the checkout updates (see
+      # .github/workflows/workspace_image/README.md). Its scripts run before the checkout, so they come
+      # from the API, at the commit that the job tests, as in pr-workspace-images.yml.
+      - name: Download the workspace image scripts
+        id: image-scripts
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/workspace-image"
+          mkdir -p "$dir"
+          echo '{ "type": "module" }' > "$dir/package.json"
+          # The scripts keep their folders below workspace_image, such as win32/vhd.ps1
+          files=(.nvmrc .github/workflows/workspace_image/{image.ts,win32/vhd.ps1,win32/Vhd.cs})
+          args=()
+          for file in "${files[@]}"; do
+            args+=(-o "$dir/${file#.github/workflows/workspace_image/}" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/contents/$file?ref=$GITHUB_SHA")
+          done
+          curl -fsSL --retry 3 --parallel --create-dirs -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github.raw' "${args[@]}"
+          for file in "${files[@]}"; do
+            [ -s "$dir/${file#.github/workflows/workspace_image/}" ]
+          done
+          echo "node-version=$(tr -d '[:space:]' < "$dir/.nvmrc")" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        if: steps.image-scripts.outcome == 'success'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.image-scripts.outputs.node-version }}
+
+      # The image is an ext4 volume, which a loop device mounts at the parent of the workspace. image.ts
+      # gives up before the timeout of the step, which could stop it with the image half mounted, and
+      # then unmounts it and detaches the loop device as after any other error, so that the job sets up
+      # as without an image. Pull requests to release branches look for images of their own branch,
+      # which pr-workspace-images.yml doesn't build.
+      - name: Restore the workspace image
+        id: image
+        if: steps.image-scripts.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 5
+        working-directory: ${{ runner.temp }}
+        run: node "$RUNNER_TEMP/workspace-image/image.ts" restore --name workspace-image-linux-x64.img --branch "$WORKSPACE_IMAGE_BRANCH" --timeout-seconds 240
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKSPACE_IMAGE_BRANCH: ${{ inputs.workspace_image_branch }}
+
       - name: Checkout microsoft/vscode
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           lfs: true
+          # With a workspace image, keeps its untracked files, such as node_modules, and reuses its .git
+          clean: ${{ steps.image.outputs.used != 'true' }}
 
       - name: Setup Node.js
+        if: steps.image-scripts.outcome != 'success'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm
+
+      # The linux-packages job of pr-workspace-images.yml caches the .deb files of the packages on main, for
+      # the image of the runner, so that the jobs install them without apt-get, whose mirrors are at times
+      # slow. Without them, apt-get installs the packages as before.
+      - name: Install system packages
+        uses: ./.github/actions/install-linux-packages
 
       - name: Setup system services
         run: |
@@ -87,23 +152,15 @@ jobs:
           # Ubuntu 24.04 restricts this by default via AppArmor
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           # Start X server
-          ./build/azure-pipelines/linux/apt-retry.sh sudo apt-get update
-          ./build/azure-pipelines/linux/apt-retry.sh sudo apt-get install -y pkg-config \
-            xvfb \
-            libgtk-3-0 \
-            libxkbfile-dev \
-            libkrb5-dev \
-            libgbm1 \
-            rpm \
-            bubblewrap \
-            socat
           sudo cp build/azure-pipelines/linux/xvfb.init /etc/init.d/xvfb
           sudo chmod +x /etc/init.d/xvfb
           sudo update-rc.d xvfb defaults
           sudo service xvfb start
 
+      # A workspace image holds the node_modules of its commit, which the install steps update
       - name: Restore node_modules cache
         id: cache-node-modules
+        if: steps.image.outputs.used != 'true'
         uses: ./.github/actions/restore-node-modules
         with:
           key-prefix: node_modules-linux
@@ -116,16 +173,18 @@ jobs:
           set -e
 
           for i in {1..5}; do # try 5 times
-            npm ci && break
+            pnpm install --frozen-lockfile && break
             if [ $i -eq 5 ]; then
-              echo "Npm install failed too many times" >&2
+              echo "pnpm install failed too many times" >&2
               exit 1
             fi
-            echo "Npm install failed $i, trying again..."
+            echo "pnpm install failed $i, trying again..."
           done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # On a workspace image, pnpm installs only what changed since the commit of the image, and
+      # setup-env.sh reuses the sysroots and compilers in its .build folder
       - name: Install dependencies
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: |
@@ -134,12 +193,12 @@ jobs:
           source ./build/azure-pipelines/linux/setup-env.sh
 
           for i in {1..5}; do # try 5 times
-            npm ci && break
+            pnpm install --frozen-lockfile && break
             if [ $i -eq 5 ]; then
-              echo "Npm install failed too many times" >&2
+              echo "pnpm install failed too many times" >&2
               exit 1
             fi
-            echo "Npm install failed $i, trying again..."
+            echo "pnpm install failed $i, trying again..."
           done
         env:
           npm_config_arch: ${{ env.NPM_ARCH }}
@@ -288,7 +347,7 @@ jobs:
         continue-on-error: true
 
       - name: Transpile client and extensions
-        run: npm run gulp transpile-client-esbuild transpile-extensions
+        run: pnpm run gulp transpile-client-esbuild transpile-extensions
 
       - name: Setup Electron
         if: ${{ (env.ELECTRON_TESTS == 'true' && env.UNIT_TEST_SUITE != 'node') || env.REMOTE_TESTS == 'true' }}
@@ -301,7 +360,16 @@ jobs:
       - name: Compile browser integration test runner
         if: ${{ env.BROWSER_TESTS == 'true' && env.INTEGRATION_TESTS == 'true' }}
         working-directory: test/integration/browser
-        run: npm run compile
+        run: pnpm run compile
+
+      # pr-node-modules.yml fills this cache on main, so pull requests don't download the browsers.
+      # A workspace image holds them already, and points PLAYWRIGHT_BROWSERS_PATH at them, which this
+      # action would point into the workspace.
+      - name: Restore Playwright browsers
+        if: ${{ env.BROWSER_TESTS == 'true' && steps.image.outputs.used != 'true' }}
+        uses: ./.github/actions/restore-playwright
+        with:
+          browsers: --only-shell chromium
 
       - name: Install Playwright Chromium
         if: ${{ env.BROWSER_TESTS == 'true' }}
@@ -309,7 +377,7 @@ jobs:
           set -e
 
           for i in {1..3}; do
-            if npm exec -- playwright install --only-shell chromium; then
+            if pnpm exec playwright install --only-shell chromium; then
               echo "Install successful on attempt $i"
               break
             fi
@@ -334,12 +402,12 @@ jobs:
       - name: 🧪 Run unit tests (node.js)
         if: ${{ env.ELECTRON_TESTS == 'true' && env.UNIT_TESTS == 'true' && env.UNIT_TEST_SUITE != 'electron' }}
         timeout-minutes: 25
-        run: npm run test-node -- --workers 4 --rerun-failed-files 2
+        run: pnpm run test-node --workers 4 --rerun-failed-files 2
 
       - name: 🧪 Run unit tests (Browser, Chromium)
         if: ${{ env.BROWSER_TESTS == 'true' && env.UNIT_TESTS == 'true' }}
         timeout-minutes: 30
-        run: npm run test-browser-no-install -- --browser chromium --tfs "Browser Unit Tests" --workers 4 --rerun-failed-files 2
+        run: pnpm run test-browser-no-install --browser chromium --tfs "Browser Unit Tests" --workers 4 --rerun-failed-files 2
         env:
           DEBUG: "*browser*"
 
@@ -347,7 +415,7 @@ jobs:
         if: ${{ env.INTEGRATION_TESTS == 'true' || env.SMOKE_TESTS == 'true' }}
         run: |
           set -e
-          npm run gulp \
+          pnpm run gulp \
             compile-extension:configuration-editing \
             compile-extension:emmet \
             compile-extension:git \
@@ -401,6 +469,8 @@ jobs:
         env:
           DISPLAY: ":10"
           VSCODE_SKIP_PRELAUNCH: '1'
+          # Runs the suites, which mostly start VS Code, in parallel (see scripts/integration-test-suites.sh).
+          INTEGRATION_TEST_PARALLEL: '2'
 
       # The web and remote tests start the server out of sources, which downloads its Node.js from nodejs.org unless
       # the runner already has that version.
@@ -420,32 +490,38 @@ jobs:
         env:
           DISPLAY: ":10"
           VSCODE_SKIP_PRELAUNCH: '1'
+          # Runs the suites, which mostly start VS Code, in parallel (see scripts/integration-test-suites.sh).
+          INTEGRATION_TEST_PARALLEL: '2'
 
       - name: Compile smoke tests
         if: ${{ env.SMOKE_TESTS == 'true' }}
         working-directory: test/smoke
-        run: npm run compile
+        run: pnpm run compile
 
       - name: Compile Copilot Chat extension for smoke tests
         if: ${{ env.SMOKE_TESTS == 'true' && env.BROWSER_TESTS != 'true' }}
         working-directory: extensions/copilot
-        run: npm run compile
+        run: pnpm run compile
 
       # Remove the musl-libc Claude Code native binary so the bundled
       # @anthropic-ai/claude-agent-sdk in extensions/copilot falls through to the
       # glibc variant (or its bundled ./cli.js fallback). The musl binary is
       # pulled in by the root devDependency @anthropic-ai/claude-agent-sdk@0.2.x,
       # whose package metadata declares both "linux-x64" and "linux-x64-musl" as
-      # optionalDependencies with `os: ["linux"]` and no libc filter, so npm
+      # optionalDependencies with `os: ["linux"]` and no libc filter, so pnpm
       # installs both variants on any Linux. The SDK probes the musl variant
       # first; spawning a musl-linked ELF on the glibc-based GitHub Actions
       # runner returns ENOENT (missing ELF interpreter), which causes Claude
       # session smoke tests to time out. See
       # https://github.com/anthropics/claude-agent-sdk-typescript for the SDK
       # resolution order.
+      # The platform packages are next to the real folder of the SDK, which is the root
+      # node_modules/@anthropic-ai with a flat node_modules.
       - name: Remove musl Claude binary on glibc Linux
         if: ${{ env.SMOKE_TESTS == 'true' && env.BROWSER_TESTS != 'true' }}
-        run: rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64-musl
+        run: |
+          sdk_scope="$(dirname "$(realpath node_modules/@anthropic-ai/claude-agent-sdk)")"
+          rm -rf "$sdk_scope/claude-agent-sdk-linux-x64-musl" "$sdk_scope/claude-agent-sdk-linux-arm64-musl"
 
       - name: Diagnostics before smoke test run (processes, max_user_watches, number of opened file handles)
         run: |
@@ -468,7 +544,7 @@ jobs:
       - name: 🧪 Run smoke tests (Electron)
         if: ${{ env.ELECTRON_TESTS == 'true' && env.SMOKE_TESTS == 'true' }}
         timeout-minutes: 20
-        run: npm run smoketest-no-compile -- --tracing --shard ${{ env.SMOKE_SHARD_INDEX }}/${{ env.SMOKE_SHARD_TOTAL }}
+        run: pnpm run smoketest-no-compile --tracing --shard ${{ env.SMOKE_SHARD_INDEX }}/${{ env.SMOKE_SHARD_TOTAL }}
         env:
           DISPLAY: ":10"
           VSCODE_SMOKE_TEST_POLICY: '1'
@@ -483,12 +559,12 @@ jobs:
       - name: 🧪 Run smoke tests (Browser, Chromium)
         if: ${{ env.BROWSER_TESTS == 'true' && env.SMOKE_TESTS == 'true' }}
         timeout-minutes: 20
-        run: npm run smoketest-no-compile -- --web --tracing --headless
+        run: pnpm run smoketest-no-compile --web --tracing --headless
 
       - name: 🧪 Run smoke tests (Remote)
         if: ${{ env.REMOTE_TESTS == 'true' && env.SMOKE_TESTS == 'true' }}
         timeout-minutes: 20
-        run: npm run smoketest-no-compile -- --remote --tracing
+        run: pnpm run smoketest-no-compile --remote --tracing
         env:
           DISPLAY: ":10"
 

@@ -1,6 +1,6 @@
 ---
 name: smoke-tests
-description: Use when running VS Code smoke tests or working on smoke-test CI steps. Covers npm run smoketest / smoketest-no-compile, grep filtering tests, and a temporary repeat-loop technique for tracking down flaky smoke tests in CI.
+description: Use when running VS Code smoke tests or working on smoke-test CI steps. Covers pnpm run smoketest / smoketest-no-compile, grep filtering tests, and a temporary repeat-loop technique for tracking down flaky smoke tests in CI.
 ---
 
 # Running Smoke Tests
@@ -9,8 +9,8 @@ Smoke tests live in `test/smoke/` and drive a full VS Code instance (Electron, w
 
 ## Scripts
 
-- `npm run smoketest` — compiles the smoke tests first (`test/smoke`), then runs them.
-- `npm run smoketest-no-compile` — runs the already-compiled smoke tests. CI uses this after an explicit compile step.
+- `pnpm run smoketest` — compiles the smoke tests first (`test/smoke`), then runs them.
+- `pnpm run smoketest-no-compile` — runs the already-compiled smoke tests. CI uses this after an explicit compile step.
 
 Both forward extra arguments after `--` to the runner (`test/smoke/test/index.js`).
 
@@ -28,13 +28,13 @@ Both forward extra arguments after `--` to the runner (`test/smoke/test/index.js
 
 ```bash
 # Run everything (Electron, from source)
-npm run smoketest
+pnpm run smoketest
 
 # Run only a subset of suites by name, with tracing (replace <suite name> with your suite, e.g. "Agents Window")
-npm run smoketest -- -g "<suite name>" --tracing
+pnpm run smoketest -g "<suite name>" --tracing
 
 # Run against a packaged build (CI style)
-npm run smoketest-no-compile -- --tracing --build "/path/to/VSCode-darwin-arm64/Code - OSS.app"
+pnpm run smoketest-no-compile --tracing --build "/path/to/VSCode-darwin-arm64/Code - OSS.app"
 ```
 
 The `-g` pattern matches against test/suite titles. For example, `-g "Agents Window"` matches all three Agents Window suites (`Agents Window`, `Agents Window (local AgentHost)`, and `Agents Window (local AgentHost, SDK sandbox)`); use whatever substring identifies the suite(s) you care about.
@@ -49,6 +49,7 @@ Some placement is coupled to the workflows, and `test/smoke/src/shard.ts` encode
 
 - **WSL:** The WSL Dev Container suite is pinned to shard 1, and `pr-win32-test.yml` provisions WSL only in shard 1. Keep `VSCODE_SMOKE_TEST_WSL_REQUIRED` set in every shard, so that all shards register the same suites and compute the same split. GitHub-hosted Windows runners intermittently freeze while WSL2 provisions a distribution ([actions/runner-images#14938](https://github.com/actions/runner-images/issues/14938)), which leaves the check pending for about 45 minutes until GitHub reports that it lost communication with the runner.
 - **WSL version:** the agents' Windows Server 2022 image only has the inbox WSL, so provisioning installs the WSL release pinned in `build/checksums/wsl.txt` (see `build/azure-pipelines/common/wsl.psm1`). To update it, put the SHA256 and file name of a newer `wsl.<version>.x64.msi` from the [microsoft/WSL releases](https://github.com/microsoft/WSL/releases) there. The installer caches key on that file; `pr-node-modules.yml` fills the GitHub cache on `main`.
+- **Prepared WSL distribution:** the `wsl-distro` job of `pr-workspace-images.yml` (1ES pool, daily schedule and manual runs only) runs `wslDevContainer.ps1 -Operation Prepare` and saves the exported VHD in a cache keyed on the hash of `wslDevContainer.ps1` and `build/checksums/wsl.txt`. Shard 1 restores the newest entry for its hash and imports it with `wsl --import-in-place` instead of building the distribution. It builds the distribution when there is no entry for its hash (for example after a change to either file, until the next daily run or a manual run of the workflow on `main`), or when the import fails.
 - **macOS proxy runs:** On macOS, the PAC proxy Agents Window runs happen only in the last shard, so the balancer reserves their time there.
 
 Every shard must register the same suites; otherwise suites can be skipped or run twice. Don't make suite registration depend on anything that differs between shards.
@@ -94,7 +95,7 @@ Bash (Linux/macOS):
   run: |
     for i in $(seq 1 20); do
       echo "::group::Smoke probe run $i/20"
-      npm run smoketest-no-compile -- --tracing -g "<suite name>" || { echo "::error::Smoke test failed on run $i/20"; exit 1; }
+      pnpm run smoketest-no-compile --tracing -g "<suite name>" || { echo "::error::Smoke test failed on run $i/20"; exit 1; }
       echo "::endgroup::"
     done
 ```
@@ -162,4 +163,4 @@ Under `smoke-tests-<suite>/` (`smoke-tests-electron/`, `smoke-tests-browser/`, o
 
 - **Unit tests** (`.test.ts`) → `scripts/test.sh` / `runTests` tool (see the `unit-tests` skill).
 - **Integration tests** (`.integrationTest.ts` + extension tests) → `scripts/test-integration.sh` (see the `integration-tests` skill).
-- **Smoke tests** (`test/smoke/`) → `npm run smoketest` — full end-to-end UI flows.
+- **Smoke tests** (`test/smoke/`) → `pnpm run smoketest` — full end-to-end UI flows.
