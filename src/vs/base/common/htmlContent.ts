@@ -199,7 +199,7 @@ export function escapeMarkdownSyntaxTokens(text: string): string {
  * no links (including autolinks and bare URLs), images, theme icons or block syntax. Whitespace is collapsed to single spaces.
  */
 export function escapeUntrustedMarkdown(text: string): string {
-	return escapeMarkdownSyntaxTokens(escapeIcons(text.replace(/\s+/g, ' '))).replace(/[<>:.@]/g, '\\$&');
+	return escapeMarkdownSyntaxTokens(escapeIcons(text.replace(/\s+/g, ' '))).replace(/[\\<>:.@]/g, '\\$&');
 }
 
 /**
