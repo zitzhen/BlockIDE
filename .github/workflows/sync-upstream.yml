@@ -8,6 +8,8 @@ name: Sync Upstream Tag
 # - 仍有冲突时，把带冲突标记的合并结果提交到同步分支，并以 draft PR 发出，由人在分支上解决。
 # - 配置 SYNC_TOKEN（PAT）时用它推送并创建 PR，这样 PR 会正常触发 CI；
 #   只用 github.token 时 GitHub 不会为新建 PR 触发 pull_request 工作流，需要手动 rerun。
+# - SYNC_TOKEN 还必须带 workflow 权限（经典 PAT 的 `workflow` scope，或细粒度 PAT 的
+#   Workflows: Read and write），否则 GitHub 会拒绝推送含 .github/workflows 变更的分支。
 
 on:
   workflow_dispatch:
@@ -39,8 +41,16 @@ jobs:
     name: Merge upstream tag
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      HAS_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
 
     steps:
+      - name: Check push credentials
+        if: env.HAS_SYNC_TOKEN != 'true' && inputs.dry_run == false
+        run: |
+          echo "::error::未配置 SYNC_TOKEN。上游同步一定会改到 .github/workflows，而 github.token 无权推送这类变更。请配置带 workflow 权限的 PAT（经典 PAT: workflow scope；细粒度 PAT: Workflows Read and write，同时需要 Contents 和 Pull requests 的读写）后重试。"
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
