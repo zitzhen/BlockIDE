@@ -5,7 +5,7 @@ name: Sync Upstream Tag
 # 约定：
 # - 只跟进上游 tag，不合并 upstream/main（main 是每日开发流，且会混入依赖体系迁移）。
 # - 冲突只在同步分支上解决一次；可自动解决的只有「BlockIDE 侧已删除、上游又修改」的文件。
-# - 其余冲突不提交、不建 PR，任务失败并在 Summary 中列出文件清单。
+# - 仍有冲突时，把带冲突标记的合并结果提交到同步分支，并以 draft PR 发出，由人在分支上解决。
 # - 配置 SYNC_TOKEN（PAT）时用它推送并创建 PR，这样 PR 会正常触发 CI；
 #   只用 github.token 时 GitHub 不会为新建 PR 触发 pull_request 工作流，需要手动 rerun。
 
@@ -75,7 +75,7 @@ jobs:
           bash scripts/sync-upstream-tag.sh "${args[@]}"
 
       - name: Push sync branch
-        if: steps.sync.outputs.status == 'merged'
+        if: steps.sync.outputs.status == 'merged' || steps.sync.outputs.status == 'conflict'
         env:
           BRANCH: ${{ steps.sync.outputs.branch }}
           TAG: ${{ steps.sync.outputs.tag }}
@@ -94,11 +94,12 @@ jobs:
           fi
 
       - name: Open or update pull request
-        if: steps.sync.outputs.status == 'merged'
+        if: steps.sync.outputs.status == 'merged' || steps.sync.outputs.status == 'conflict'
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
           BRANCH: ${{ steps.sync.outputs.branch }}
           TAG: ${{ steps.sync.outputs.tag }}
+          STATUS: ${{ steps.sync.outputs.status }}
           REPORT: ${{ runner.temp }}/sync-report.md
         run: |
           body="$REPORT"
@@ -110,9 +111,17 @@ jobs:
           existing=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
             gh pr edit "$existing" --title "$title" --body-file "$body"
+            if [ "$STATUS" = "merged" ]; then
+              gh pr ready "$existing" || true
+            fi
             echo "已更新 PR #$existing"
+          elif [ "$STATUS" = "conflict" ]; then
+            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body" --draft
           else
             gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body"
+          fi
+          if [ "$STATUS" = "conflict" ]; then
+            echo "::warning::同步分支上还有未解决的冲突，已在 draft PR 中等待人工处理。"
           fi
 
       - name: Summary
