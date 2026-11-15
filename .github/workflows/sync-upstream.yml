@@ -1,6 +1,6 @@
 name: Sync Upstream Tag
 
-# 手动触发：把 microsoft/vscode 的 release tag 合并进 BlockIDE 的 main，并从合并结果创建 PR。
+# 手动触发：把 microsoft/vscode 的 release tag 作为同步分支推上去，并创建 PR。
 #
 # 认证：使用 GitHub App（App ID 5768659，installation 182176251）的安装令牌完成检出、推送和建 PR。
 # - 私钥来自 secrets.APP_GITHUB_PRIVATE
@@ -10,8 +10,9 @@ name: Sync Upstream Tag
 #
 # 约定：
 # - 只跟进上游 tag，不合并 upstream/main（main 是每日开发流，且会混入依赖体系迁移）。
-# - 冲突只在同步分支上解决一次；可自动解决的只有「BlockIDE 侧已删除、上游又修改」的文件。
-# - 仍有冲突时，把带冲突标记的合并结果提交到同步分支，并以 draft PR 发出，由人在分支上解决。
+# - 同步分支直接指向 tag，上游提交原样保留，不做任何预合并或改写。
+# - 冲突不由脚本伪造：GitHub 会在 PR 上原生标记冲突并禁用合并按钮。
+# - 合入 main 时使用 Create a merge commit，保留上游线性历史，仅多一个合并提交。
 
 on:
   workflow_dispatch:
@@ -20,12 +21,8 @@ on:
         description: '上游 tag，例如 1.146.0；留空则取最新稳定 tag'
         required: false
         type: string
-      prefer_ours:
-        description: '冲突时保留 BlockIDE 一侧的路径 glob，逗号分隔，例如 test/smoke/**,.github/**'
-        required: false
-        type: string
       dry_run:
-        description: '只检查合并与冲突，不推送分支、不创建 PR'
+        description: '只解析 tag 与冲突预演，不推送分支、不创建 PR'
         required: false
         type: boolean
         default: false
@@ -39,7 +36,7 @@ concurrency:
 
 jobs:
   sync:
-    name: Merge upstream tag
+    name: Point sync branch at upstream tag
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -144,11 +141,10 @@ jobs:
           git config user.name "${BOT_LOGIN}"
           git config user.email "${BOT_USER_ID}+${BOT_LOGIN}@users.noreply.github.com"
 
-      - name: Merge upstream tag
+      - name: Resolve upstream tag
         id: sync
         env:
           INPUT_TAG: ${{ inputs.tag }}
-          INPUT_PREFER_OURS: ${{ inputs.prefer_ours }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           REPORT: ${{ runner.temp }}/sync-report.md
         run: |
@@ -156,35 +152,36 @@ jobs:
           if [ -n "$INPUT_TAG" ]; then
             args+=(--tag "$INPUT_TAG")
           fi
-          if [ -n "$INPUT_PREFER_OURS" ]; then
-            args+=(--prefer-ours "$INPUT_PREFER_OURS")
-          fi
           if [ "$INPUT_DRY_RUN" = "true" ]; then
             args+=(--dry-run)
           fi
           bash scripts/sync-upstream-tag.sh "${args[@]}"
 
       - name: Push sync branch
-        if: steps.sync.outputs.status == 'merged' || steps.sync.outputs.status == 'conflict'
+        if: steps.sync.outputs.status == 'ready' || steps.sync.outputs.status == 'conflict'
         env:
           BRANCH: ${{ steps.sync.outputs.branch }}
           TAG: ${{ steps.sync.outputs.tag }}
         run: |
+          local_tip=$(git rev-parse HEAD)
           remote_tip=$(git ls-remote --heads origin "$BRANCH" | cut -f1)
-          if [ -n "$remote_tip" ]; then
-            git fetch --quiet origin "$BRANCH" || true
-            subject=$(git log -1 --format=%s "$remote_tip" 2>/dev/null || true)
-            if [ "$subject" != "chore: sync upstream $TAG" ]; then
-              echo "::error::远端分支 $BRANCH 上已有非自动提交（可能是人工解决冲突的结果），请先删除该分支后重新运行。"
-              exit 1
-            fi
+          if [ -z "$remote_tip" ] || [ "$remote_tip" = "$local_tip" ]; then
+            git push origin "HEAD:refs/heads/$BRANCH"
+            exit 0
+          fi
+
+          git fetch --quiet origin "$BRANCH" || true
+          tag_sha=$(git rev-parse "refs/tags/$TAG")
+          subject=$(git log -1 --format=%s "$remote_tip" 2>/dev/null || true)
+          if [ "$remote_tip" = "$tag_sha" ] || [ "$subject" = "chore: sync upstream $TAG" ]; then
             git push --force origin "HEAD:refs/heads/$BRANCH"
           else
-            git push origin "HEAD:refs/heads/$BRANCH"
+            echo "::error::远端分支 $BRANCH 上已有非自动提交（可能是人工解决冲突的结果），请先删除该分支后重新运行。"
+            exit 1
           fi
 
       - name: Open or update pull request
-        if: steps.sync.outputs.status == 'merged' || steps.sync.outputs.status == 'conflict'
+        if: steps.sync.outputs.status == 'ready' || steps.sync.outputs.status == 'conflict'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BRANCH: ${{ steps.sync.outputs.branch }}
@@ -202,10 +199,6 @@ jobs:
           fi
 
           title="chore: sync upstream $TAG"
-          draft=false
-          if [ "$STATUS" = "conflict" ]; then
-            draft=true
-          fi
 
           request() {
             local method="$1" url="$2" data="${3:-}" out status
@@ -233,10 +226,6 @@ jobs:
           if [ -n "$existing" ]; then
             payload=$(jq -n --arg title "$title" --arg body "$(cat "$body_file")" '{title: $title, body: $body}')
             request PATCH "$api_base/pulls/$existing" "$payload" >/dev/null
-            if [ "$STATUS" = "merged" ]; then
-              request PATCH "$api_base/pulls/$existing" '{"draft":false}' >/dev/null ||
-                echo "::warning::PR #$existing 仍是 draft，请手动点击 Ready for review。"
-            fi
             echo "已更新 PR #$existing"
           else
             payload=$(jq -n \
@@ -244,13 +233,12 @@ jobs:
               --arg head "$BRANCH" \
               --arg base main \
               --arg body "$(cat "$body_file")" \
-              --argjson draft "$draft" \
-              '{title: $title, head: $head, base: $base, body: $body, draft: $draft}')
+              '{title: $title, head: $head, base: $base, body: $body}')
             pr_url=$(request POST "$api_base/pulls" "$payload" | jq -r '.html_url // empty')
             echo "已创建 PR：$pr_url"
           fi
           if [ "$STATUS" = "conflict" ]; then
-            echo "::warning::同步分支上还有未解决的冲突，已在 draft PR 中等待人工处理。"
+            echo "::warning::PR 上有未解决的冲突，GitHub 会禁用合并按钮，需人工解决后再合并。"
           fi
 
       - name: Summary
