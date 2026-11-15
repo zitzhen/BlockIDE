@@ -114,6 +114,15 @@ jobs:
           });
           NODE
 
+      - name: Check app permissions
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls?per_page=1" >/dev/null 2>&1; then
+            echo "::error::GitHub App 缺少 Pull requests 权限。请在 App 设置中把 Pull requests 设为 Read and write，并在安装页确认更新后再重试。"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -177,8 +186,6 @@ jobs:
           STATUS: ${{ steps.sync.outputs.status }}
           REPORT: ${{ runner.temp }}/sync-report.md
         run: |
-          echo "gh 身份：$(gh api user --jq .login 2>/dev/null || echo unknown)"
-
           body="$REPORT"
           if [ ! -f "$body" ]; then
             body="$RUNNER_TEMP/sync-report-missing.md"
