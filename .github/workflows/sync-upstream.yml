@@ -2,14 +2,16 @@ name: Sync Upstream Tag
 
 # 手动触发：把 microsoft/vscode 的 release tag 合并进 BlockIDE 的 main，并从合并结果创建 PR。
 #
+# 认证：使用 GitHub App（App ID 5768659，installation 182176251）的安装令牌完成检出、推送和建 PR。
+# - 私钥来自 secrets.APP_GITHUB_PRIVATE
+# - App 需要 Contents: Read and write、Pull requests: Read and write、Workflows: Read and write
+# - 提交身份固定为该 App 的 bot 用户（356916778），不使用个人账号
+# - App 令牌不是 GITHUB_TOKEN，因此新建的 PR 会正常触发 CI
+#
 # 约定：
 # - 只跟进上游 tag，不合并 upstream/main（main 是每日开发流，且会混入依赖体系迁移）。
 # - 冲突只在同步分支上解决一次；可自动解决的只有「BlockIDE 侧已删除、上游又修改」的文件。
 # - 仍有冲突时，把带冲突标记的合并结果提交到同步分支，并以 draft PR 发出，由人在分支上解决。
-# - 配置 SYNC_TOKEN（PAT）时用它推送并创建 PR，这样 PR 会正常触发 CI；
-#   只用 github.token 时 GitHub 不会为新建 PR 触发 pull_request 工作流，需要手动 rerun。
-# - SYNC_TOKEN 还必须带 workflow 权限（经典 PAT 的 `workflow` scope，或细粒度 PAT 的
-#   Workflows: Read and write），否则 GitHub 会拒绝推送含 .github/workflows 变更的分支。
 
 on:
   workflow_dispatch:
@@ -29,8 +31,7 @@ on:
         default: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: sync-upstream
@@ -42,14 +43,76 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      HAS_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
+      APP_ID: '5768659'
+      INSTALLATION_ID: '182176251'
+      BOT_USER_ID: '356916778'
+      HAS_APP_KEY: ${{ secrets.APP_GITHUB_PRIVATE != '' }}
 
     steps:
-      - name: Check push credentials
-        if: env.HAS_SYNC_TOKEN != 'true' && inputs.dry_run == false
+      - name: Check app credentials
+        if: env.HAS_APP_KEY != 'true'
         run: |
-          echo "::error::未配置 SYNC_TOKEN。上游同步一定会改到 .github/workflows，而 github.token 无权推送这类变更。请配置带 workflow 权限的 PAT（经典 PAT: workflow scope；细粒度 PAT: Workflows Read and write，同时需要 Contents 和 Pull requests 的读写）后重试。"
+          echo "::error::未配置 APP_GITHUB_PRIVATE（GitHub App 私钥），无法生成安装令牌。"
           exit 1
+
+      - name: Create GitHub App token
+        id: app-token
+        env:
+          PRIVATE_KEY: ${{ secrets.APP_GITHUB_PRIVATE }}
+        run: |
+          node - <<'NODE'
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+
+          const appId = process.env.APP_ID;
+          const installationId = process.env.INSTALLATION_ID;
+          const privateKey = (process.env.PRIVATE_KEY || '').replace(/\\n/g, '\n');
+
+          if (!privateKey) {
+            console.error('APP_GITHUB_PRIVATE 为空');
+            process.exit(1);
+          }
+
+          const b64url = (input) => Buffer.from(input).toString('base64url');
+          const now = Math.floor(Date.now() / 1000);
+          const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+          const payload = b64url(JSON.stringify({ iat: now - 60, exp: now + 540, iss: appId }));
+          const unsigned = `${header}.${payload}`;
+          const signature = crypto.createSign('RSA-SHA256').update(unsigned).sign(privateKey);
+          const jwt = `${unsigned}.${b64url(signature)}`;
+
+          const api = async (path, options = {}) => {
+            const response = await fetch(`https://api.github.com${path}`, {
+              ...options,
+              headers: {
+                accept: 'application/vnd.github+json',
+                'x-github-api-version': '2022-11-28',
+                ...(options.headers || {})
+              }
+            });
+            if (!response.ok) {
+              console.error(`${path} -> ${response.status} ${await response.text()}`);
+              process.exit(1);
+            }
+            return response.json();
+          };
+
+          (async () => {
+            const app = await api('/app', { headers: { authorization: `Bearer ${jwt}` } });
+            const installation = await api(`/app/installations/${installationId}/access_tokens`, {
+              method: 'POST',
+              headers: { authorization: `Bearer ${jwt}` }
+            });
+
+            const login = `${app.slug}[bot]`;
+            console.log(`::add-mask::${installation.token}`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `token=${installation.token}\nlogin=${login}\nslug=${app.slug}\n`);
+            console.log(`GitHub App: ${app.slug} (id ${app.id})，安装 ${installationId}，提交身份 ${login}`);
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,12 +120,14 @@ jobs:
           ref: main
           fetch-depth: 0
           submodules: recursive
-          token: ${{ secrets.SYNC_TOKEN || github.token }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Configure git identity
+        env:
+          BOT_LOGIN: ${{ steps.app-token.outputs.login }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "${BOT_LOGIN}"
+          git config user.email "${BOT_USER_ID}+${BOT_LOGIN}@users.noreply.github.com"
 
       - name: Merge upstream tag
         id: sync
@@ -106,16 +171,13 @@ jobs:
       - name: Open or update pull request
         if: steps.sync.outputs.status == 'merged' || steps.sync.outputs.status == 'conflict'
         env:
-          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
-          FALLBACK_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BRANCH: ${{ steps.sync.outputs.branch }}
           TAG: ${{ steps.sync.outputs.tag }}
           STATUS: ${{ steps.sync.outputs.status }}
           REPORT: ${{ runner.temp }}/sync-report.md
         run: |
           echo "gh 身份：$(gh api user --jq .login 2>/dev/null || echo unknown)"
-          gh auth status 2>&1 | head -20 || true
-          echo "仓库权限：$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.permissions' 2>/dev/null || echo unknown)"
 
           body="$REPORT"
           if [ ! -f "$body" ]; then
@@ -128,23 +190,15 @@ jobs:
             draft=(--draft)
           fi
 
-          create_pr() {
-            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body" "${draft[@]}"
-          }
-
           existing=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
-            if ! gh pr edit "$existing" --title "$title" --body-file "$body"; then
-              echo "::warning::SYNC_TOKEN 无法更新 PR #$existing，改用 github.token 重试。"
-              GH_TOKEN="$FALLBACK_TOKEN" gh pr edit "$existing" --title "$title" --body-file "$body"
-            fi
+            gh pr edit "$existing" --title "$title" --body-file "$body"
             if [ "$STATUS" = "merged" ]; then
-              gh pr ready "$existing" || GH_TOKEN="$FALLBACK_TOKEN" gh pr ready "$existing" || true
+              gh pr ready "$existing" || true
             fi
             echo "已更新 PR #$existing"
-          elif ! create_pr; then
-            echo "::warning::SYNC_TOKEN 无法创建 PR，改用 github.token（该 PR 不会自动触发 CI，需要手动 rerun）。"
-            env GH_TOKEN="$FALLBACK_TOKEN" gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body" "${draft[@]}"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body" "${draft[@]}"
           fi
           if [ "$STATUS" = "conflict" ]; then
             echo "::warning::同步分支上还有未解决的冲突，已在 draft PR 中等待人工处理。"
