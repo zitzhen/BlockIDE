@@ -61,8 +61,8 @@ jobs:
 
       - name: Configure git identity
         run: |
-          git config user.name "${GITHUB_ACTOR}"
-          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Merge upstream tag
         id: sync
@@ -107,28 +107,44 @@ jobs:
         if: steps.sync.outputs.status == 'merged' || steps.sync.outputs.status == 'conflict'
         env:
           GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+          FALLBACK_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.sync.outputs.branch }}
           TAG: ${{ steps.sync.outputs.tag }}
           STATUS: ${{ steps.sync.outputs.status }}
           REPORT: ${{ runner.temp }}/sync-report.md
         run: |
+          echo "gh 身份：$(gh api user --jq .login 2>/dev/null || echo unknown)"
+          gh auth status 2>&1 | head -20 || true
+          echo "仓库权限：$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.permissions' 2>/dev/null || echo unknown)"
+
           body="$REPORT"
           if [ ! -f "$body" ]; then
             body="$RUNNER_TEMP/sync-report-missing.md"
             printf '同步脚本未生成报告，请查看工作流日志。\n' > "$body"
           fi
           title="chore: sync upstream $TAG"
+          draft=()
+          if [ "$STATUS" = "conflict" ]; then
+            draft=(--draft)
+          fi
+
+          create_pr() {
+            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body" "${draft[@]}"
+          }
+
           existing=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
-            gh pr edit "$existing" --title "$title" --body-file "$body"
+            if ! gh pr edit "$existing" --title "$title" --body-file "$body"; then
+              echo "::warning::SYNC_TOKEN 无法更新 PR #$existing，改用 github.token 重试。"
+              GH_TOKEN="$FALLBACK_TOKEN" gh pr edit "$existing" --title "$title" --body-file "$body"
+            fi
             if [ "$STATUS" = "merged" ]; then
-              gh pr ready "$existing" || true
+              gh pr ready "$existing" || GH_TOKEN="$FALLBACK_TOKEN" gh pr ready "$existing" || true
             fi
             echo "已更新 PR #$existing"
-          elif [ "$STATUS" = "conflict" ]; then
-            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body" --draft
-          else
-            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body"
+          elif ! create_pr; then
+            echo "::warning::SYNC_TOKEN 无法创建 PR，改用 github.token（该 PR 不会自动触发 CI，需要手动 rerun）。"
+            env GH_TOKEN="$FALLBACK_TOKEN" gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body" "${draft[@]}"
           fi
           if [ "$STATUS" = "conflict" ]; then
             echo "::warning::同步分支上还有未解决的冲突，已在 draft PR 中等待人工处理。"
