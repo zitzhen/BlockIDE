@@ -6,7 +6,7 @@
 #    1. fetch 上游 tag，默认取最新的稳定 tag（形如 1.146.0）
 #    2. 从基线分支创建 sync/upstream-<tag>，做一次 --no-ff 合并
 #    3. 自动解决「BlockIDE 侧已删除、上游又修改」的 modify/delete 冲突（保持删除）
-#    4. 其余冲突中止合并并列出文件，不留下任何提交
+#    4. 仍有冲突时带冲突标记提交，交给 PR 继续解决（--abort-on-conflict 可改为中止）
 #
 #  用法：
 #    scripts/sync-upstream-tag.sh
@@ -14,7 +14,8 @@
 #    scripts/sync-upstream-tag.sh --dry-run
 #    scripts/sync-upstream-tag.sh --prefer-ours 'test/smoke/**'
 #
-#  退出码：0 成功（已合并 / 无需合并 / dry-run 通过）；2 存在需人工处理的冲突；1 其它错误。
+#  退出码：0 成功（已合并 / 无需合并 / dry-run）；2 仅在使用 --abort-on-conflict 时出现
+#          需人工处理的冲突；1 其它错误。
 #---------------------------------------------------------------------------------------------
 
 set -eo pipefail
@@ -25,6 +26,7 @@ BASE_BRANCH="main"
 TAG=""
 REPORT=""
 DRY_RUN=0
+ABORT_ON_CONFLICT=0
 PREFER_OURS=()
 
 usage() {
@@ -36,6 +38,7 @@ usage() {
   --prefer-ours <glob>   冲突时保留 BlockIDE 一侧的路径 glob，可重复或用逗号分隔
   --report <path>        额外把 Markdown 摘要写入文件（CI 用作 PR 描述）
   --dry-run              只做合并与冲突检查，不提交、不保留分支
+  --abort-on-conflict    存在人工冲突时中止合并并退出 2（默认是带冲突标记提交）
   -h, --help             显示本帮助
 EOF
 }
@@ -128,7 +131,7 @@ write_report() {
 					done
 				fi
 				;;
-			conflict)
+			conflict|dry-run-conflict|conflict-aborted)
 				printf -- '- 上游 tag：`%s`\n' "$TAG"
 				printf -- '- 基线：`%s` @ `%s`\n' "$BASE_BRANCH" "$BASE_SHA"
 				printf -- '- 上游提交数：%s\n' "$UPSTREAM_COMMITS"
@@ -142,10 +145,20 @@ write_report() {
 				for item in "${STILL[@]}"; do
 					printf -- '- `%s`\n' "$item"
 				done
-				printf '\n本次合并已中止，未产生提交。本地处理：\n\n'
-				printf '```sh\ngit fetch %s --tags\ngit switch -c %s %s\ngit merge --no-ff %s\n' \
-					"$UPSTREAM_REMOTE" "$BRANCH" "$BASE_BRANCH" "$TAG"
-				printf '# 解决冲突后\ngit commit\n```\n'
+				if [ "$status" = "conflict" ]; then
+					printf '\n合并结果已提交到 `%s`，文件里保留了冲突标记（`<<<<<<<` / `=======` / `>>>>>>>`），\n' "$BRANCH"
+					printf 'PR 以 draft 形式创建，在该分支上解决后推送即可。合并前请确认所有标记都已删除。\n'
+					printf '冲突解决前 PR 的编译检查会失败，这是预期行为。\n'
+					printf '\n本地继续：\n\n'
+					printf '```sh\ngit fetch origin %s\ngit switch %s\n# 编辑上面列出的文件，删除冲突标记\ngit add -u\ngit commit -m "fix: resolve upstream %s conflicts"\ngit push\n```\n' \
+						"$BRANCH" "$BRANCH" "$TAG"
+				elif [ "$status" = "conflict-aborted" ]; then
+					printf '\n已在本地中止合并，未产生提交。本地处理：\n\n'
+					printf '```sh\ngit fetch %s --tags\ngit switch -c %s %s\ngit merge --no-ff %s\n# 解决冲突后\ngit commit\n```\n' \
+						"$UPSTREAM_REMOTE" "$BRANCH" "$BASE_BRANCH" "$TAG"
+				else
+					printf '\ndry-run 未提交，以上冲突需要在正式同步时处理。\n'
+				fi
 				;;
 		esac
 		printf '\n---\n由 `scripts/sync-upstream-tag.sh` 生成。\n'
@@ -198,6 +211,10 @@ while [ $# -gt 0 ]; do
 			;;
 		--dry-run)
 			DRY_RUN=1
+			shift
+			;;
+		--abort-on-conflict)
+			ABORT_ON_CONFLICT=1
 			shift
 			;;
 		-h|--help)
@@ -296,14 +313,22 @@ while IFS= read -r path; do
 done <<< "$STILL_PATHS"
 
 if [ ${#STILL[@]} -gt 0 ]; then
-	git merge --abort
-	back_to_base
-	git branch -D "$BRANCH" >/dev/null 2>&1 || true
-	say "存在 $(( ${#STILL[@]} )) 个需要人工处理的冲突，已中止合并"
-	finish conflict 2
-fi
-
-if [ "$DRY_RUN" = "1" ]; then
+	if [ "$ABORT_ON_CONFLICT" = "1" ]; then
+		git merge --abort
+		back_to_base
+		git branch -D "$BRANCH" >/dev/null 2>&1 || true
+		say "存在 $(( ${#STILL[@]} )) 个需要人工处理的冲突，已中止合并"
+		finish conflict-aborted 2
+	fi
+	if [ "$DRY_RUN" = "1" ]; then
+		git merge --abort
+		back_to_base
+		git branch -D "$BRANCH" >/dev/null 2>&1 || true
+		say "dry-run：存在 $(( ${#STILL[@]} )) 个需要人工处理的冲突"
+		finish dry-run-conflict 0
+	fi
+	say "存在 $(( ${#STILL[@]} )) 个需要人工处理的冲突，将带冲突标记提交，供 PR 继续解决"
+elif [ "$DRY_RUN" = "1" ]; then
 	git merge --abort
 	back_to_base
 	git branch -D "$BRANCH" >/dev/null 2>&1 || true
@@ -322,6 +347,16 @@ if [ ${#RESOLVED[@]} -gt 0 ]; then
 $(for item in "${RESOLVED[@]}"; do printf -- '- %s\n' "$item"; done)"
 fi
 
+STATUS=merged
+if [ ${#STILL[@]} -gt 0 ]; then
+	COMMIT_BODY="$COMMIT_BODY
+
+存在未解决的冲突（已按带冲突标记的文件提交）:
+$(for item in "${STILL[@]}"; do printf -- '- %s\n' "$item"; done)"
+	git add -u
+	STATUS=conflict
+fi
+
 git commit -q -m "chore: sync upstream $TAG" -m "$COMMIT_BODY" || die "创建合并提交失败"
 
 # 上游新增的内置扩展目录：既包括上游新扩展，也包括被 BlockIDE 删除后又被上游加回文件的目录。
@@ -332,5 +367,5 @@ if [ -n "$NEW_EXTENSION_DIRS" ]; then
 	say "注意：合并结果出现新的内置扩展目录：$(printf '%s ' $NEW_EXTENSION_DIRS)"
 fi
 
-say "已创建合并提交：$(git rev-parse --short HEAD)（分支 $BRANCH）"
-finish merged 0
+say "已创建合并提交：$(git rev-parse --short HEAD)（分支 $BRANCH，状态 $STATUS）"
+finish "$STATUS" 0
