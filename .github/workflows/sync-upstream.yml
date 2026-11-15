@@ -106,6 +106,7 @@ jobs:
 
             const login = `${app.slug}[bot]`;
             console.log(`::add-mask::${installation.token}`);
+            console.log(`安装令牌权限：${JSON.stringify(installation.permissions)}`);
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `token=${installation.token}\nlogin=${login}\nslug=${app.slug}\n`);
             console.log(`GitHub App: ${app.slug} (id ${app.id})，安装 ${installationId}，提交身份 ${login}`);
           })().catch((error) => {
