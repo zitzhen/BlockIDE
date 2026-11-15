@@ -119,8 +119,13 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls?per_page=1" >/dev/null 2>&1; then
-            echo "::error::GitHub App 缺少 Pull requests 权限。请在 App 设置中把 Pull requests 设为 Read and write，并在安装页确认更新后再重试。"
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/pulls?per_page=1")
+          if [ "$status" != "200" ]; then
+            echo "::error::GitHub App 缺少 Pull requests 权限（HTTP $status）。请在 App 设置中把 Pull requests 设为 Read and write，并在安装页确认更新后再重试。"
             exit 1
           fi
 
@@ -187,26 +192,62 @@ jobs:
           STATUS: ${{ steps.sync.outputs.status }}
           REPORT: ${{ runner.temp }}/sync-report.md
         run: |
-          body="$REPORT"
-          if [ ! -f "$body" ]; then
-            body="$RUNNER_TEMP/sync-report-missing.md"
-            printf '同步脚本未生成报告，请查看工作流日志。\n' > "$body"
-          fi
-          title="chore: sync upstream $TAG"
-          draft=()
-          if [ "$STATUS" = "conflict" ]; then
-            draft=(--draft)
+          set -uo pipefail
+          api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+
+          body_file="$REPORT"
+          if [ ! -f "$body_file" ]; then
+            body_file="$RUNNER_TEMP/sync-report-missing.md"
+            printf '同步脚本未生成报告，请查看工作流日志。\n' > "$body_file"
           fi
 
-          existing=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number')
+          title="chore: sync upstream $TAG"
+          draft=false
+          if [ "$STATUS" = "conflict" ]; then
+            draft=true
+          fi
+
+          request() {
+            local method="$1" url="$2" data="${3:-}" out status
+            out=$(mktemp)
+            local args=(-sS -o "$out" -w '%{http_code}' -X "$method"
+              -H "Authorization: Bearer $GH_TOKEN"
+              -H "Accept: application/vnd.github+json"
+              -H "X-GitHub-Api-Version: 2022-11-28")
+            if [ -n "$data" ]; then
+              args+=(-H "Content-Type: application/json" --data-binary "$data")
+            fi
+            status=$(curl "${args[@]}" "$url") || { rm -f "$out"; return 1; }
+            if [ "$status" -ge 400 ]; then
+              echo "HTTP $status: $(cat "$out")" >&2
+              rm -f "$out"
+              return 1
+            fi
+            cat "$out"
+            rm -f "$out"
+          }
+
+          existing=$(request GET "$api_base/pulls?state=open&per_page=100" |
+            jq -r --arg branch "$BRANCH" '[.[] | select(.head.ref == $branch)][0].number // empty')
+
           if [ -n "$existing" ]; then
-            gh pr edit "$existing" --title "$title" --body-file "$body"
+            payload=$(jq -n --arg title "$title" --arg body "$(cat "$body_file")" '{title: $title, body: $body}')
+            request PATCH "$api_base/pulls/$existing" "$payload" >/dev/null
             if [ "$STATUS" = "merged" ]; then
-              gh pr ready "$existing" || true
+              request PATCH "$api_base/pulls/$existing" '{"draft":false}' >/dev/null ||
+                echo "::warning::PR #$existing 仍是 draft，请手动点击 Ready for review。"
             fi
             echo "已更新 PR #$existing"
           else
-            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body" "${draft[@]}"
+            payload=$(jq -n \
+              --arg title "$title" \
+              --arg head "$BRANCH" \
+              --arg base main \
+              --arg body "$(cat "$body_file")" \
+              --argjson draft "$draft" \
+              '{title: $title, head: $head, base: $base, body: $body, draft: $draft}')
+            pr_url=$(request POST "$api_base/pulls" "$payload" | jq -r '.html_url // empty')
+            echo "已创建 PR：$pr_url"
           fi
           if [ "$STATUS" = "conflict" ]; then
             echo "::warning::同步分支上还有未解决的冲突，已在 draft PR 中等待人工处理。"
