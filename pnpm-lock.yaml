@@ -245,10 +245,10 @@ importers:
         specifier: 0.163.0
         version: 0.163.0
       '@playwright/cli':
-        specifier: ^0.1.22
+        specifier: ^0.1.9
         version: 0.1.22
       '@playwright/test':
-        specifier: ^1.61.1
+        specifier: 1.61.1
         version: 1.61.1
       '@stylistic/eslint-plugin':
         specifier: ^5.10.0
@@ -275,7 +275,7 @@ importers:
         specifier: 24.x
         version: 24.12.4
       '@types/sinon':
-        specifier: ^10.0.2
+        specifier: 10.0.2
         version: 10.0.2
       '@types/sinon-test':
         specifier: ^2.4.2
@@ -314,10 +314,10 @@ importers:
         specifier: npm:typescript@^7.0.2
         version: typescript@7.0.2
       '@vscode/component-explorer':
-        specifier: ^0.2.1-161
+        specifier: 0.2.1-161
         version: 0.2.1-161
       '@vscode/component-explorer-cli':
-        specifier: ^0.2.1-163
+        specifier: 0.2.1-163
         version: 0.2.1-163(playwright@1.61.1)(typanion@3.14.0)
       '@vscode/gulp-electron':
         specifier: ^1.43.0
@@ -425,7 +425,7 @@ importers:
         specifier: ^1.2.0
         version: 1.2.0
       gulp-rename:
-        specifier: ^1.2.0
+        specifier: 1.2.2
         version: 1.2.2
       gulp-replace:
         specifier: ^0.5.4
@@ -470,7 +470,7 @@ importers:
         specifier: ^1.0.1
         version: 1.0.1
       playwright:
-        specifier: ^1.61.1
+        specifier: 1.61.1
         version: 1.61.1
       rcedit:
         specifier: ^1.1.0

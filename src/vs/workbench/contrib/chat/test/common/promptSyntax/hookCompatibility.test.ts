@@ -13,25 +13,12 @@ import { URI } from '../../../../../../base/common/uri.js';
 suite('HookCompatibility', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('recognizes userPromptTransformed for Copilot without advertising it for other harnesses', () => {
-		assert.deepStrictEqual({
-			copilot: HOOKS_BY_TARGET[Target.GitHubCopilot].userPromptTransformed,
-			alias: getCanonicalAgentHookName(Target.GitHubCopilot, 'UserPromptTransformed'),
-			vscode: getCanonicalAgentHookName(Target.VSCode, 'UserPromptTransformed'),
-			claude: getCanonicalAgentHookName(Target.Claude, 'UserPromptTransformed'),
-		}, {
-			copilot: HookType.UserPromptTransformed,
-			alias: 'userPromptTransformed',
-			vscode: undefined,
-			claude: undefined,
-		});
-	});
-
 	suite('buildNewHookFile', () => {
 		const copilotHookNames: [HookType, string][] = [
 			[HookType.SessionStart, 'sessionStart'],
 			[HookType.SessionEnd, 'sessionEnd'],
 			[HookType.UserPromptSubmit, 'userPromptSubmitted'],
+			[HookType.UserPromptTransformed, 'userPromptTransformed'],
 			[HookType.PreToolUse, 'preToolUse'],
 			[HookType.PostToolUse, 'postToolUse'],
 			[HookType.PreCompact, 'preCompact'],
@@ -68,6 +55,20 @@ suite('HookCompatibility', () => {
 					}]
 				}
 			});
+		});
+	});
+
+	test('recognizes userPromptTransformed for Copilot without advertising it for other harnesses', () => {
+		assert.deepStrictEqual({
+			copilot: HOOKS_BY_TARGET[Target.GitHubCopilot].userPromptTransformed,
+			alias: getCanonicalAgentHookName(Target.GitHubCopilot, 'UserPromptTransformed'),
+			vscode: getCanonicalAgentHookName(Target.VSCode, 'UserPromptTransformed'),
+			claude: getCanonicalAgentHookName(Target.Claude, 'UserPromptTransformed'),
+		}, {
+			copilot: HookType.UserPromptTransformed,
+			alias: 'userPromptTransformed',
+			vscode: undefined,
+			claude: undefined,
 		});
 	});
 

@@ -19,7 +19,7 @@ import { SESSIONS_LIST_PROMOTE_NEW_CHAT_ACTION_DEFAULT, SessionsListPromoteNewCh
 import { CustomViewVisibleContext } from '../../../common/agentsWindowContextKeys.js';
 import { localize } from '../../../../nls.js';
 import { FOCUS_AI_CUSTOMIZATION_VIEW_ID } from '../../aiCustomizationTreeView/browser/aiCustomizationTreeView.js';
-import { ISessionsPartService } from '../../../../workbench/contrib/sessions/browser/sessionsPartService.js';
+import { ISessionsPartService } from '../../../../workbench/services/sessions/browser/sessionsPartService.js';
 import { ISessionsService } from '../../../../workbench/contrib/sessions/browser/sessionsService.js';
 import { REPLACE_PROMPT_TEMPLATE_PLACEHOLDER_COMMAND_ID } from '../../../../workbench/contrib/sessions/browser/chat/promptTemplatePlaceholder.js';
 import { ARCHIVE_SESSION_COMMAND_ID, FOCUS_ACTIVE_SESSION_COMMAND_ID, FOCUS_NEW_SESSION_HARNESS_PICKER_COMMAND_ID, FOCUS_NEW_SESSION_WORKSPACE_PICKER_COMMAND_ID, FOCUS_NEXT_CHAT_GROUP_COMMAND_ID, FOCUS_PREVIOUS_CHAT_GROUP_COMMAND_ID, MARK_SESSION_READ_COMMAND_ID, MARK_SESSION_UNREAD_COMMAND_ID, MOVE_CHAT_TO_NEXT_GROUP_COMMAND_ID, MOVE_CHAT_TO_PREVIOUS_GROUP_COMMAND_ID, RENAME_CHAT_COMMAND_ID, RENAME_SESSION_COMMAND_ID, SEND_IN_BACKGROUND_COMMAND_ID, SESSION_GRID_FOCUS_COMMANDS, SPLIT_CHAT_GROUP_DOWN_COMMAND_ID, SPLIT_CHAT_GROUP_RIGHT_COMMAND_ID } from '../../../../workbench/contrib/sessions/common/sessionCommands.js';
@@ -32,12 +32,12 @@ import { getWorktreeSuggestionAccessibilityHelp } from '../../../../workbench/co
 import { AGENT_SESSIONS_STORAGE_CLEANUP_SUGGESTION_SETTING } from '../../../../workbench/contrib/sessions/browser/sessionInputBanners/sessionWorktreeCleanupService.js';
 import { IWorkbenchLayoutService } from '../../../../workbench/services/layout/browser/layoutService.js';
 import { NAVIGATE_VIEW_COMMANDS } from '../../../../workbench/browser/actions/navigationActions.js';
-import { isPhoneLayout } from '../../../../workbench/contrib/sessions/browser/mobileLayout.js';
-import { AgentWorkbenchLayout, ISessionsHostLayoutService } from '../../../../workbench/contrib/sessions/browser/sessionsHostLayoutService.js';
+import { isPhoneLayout } from '../../../../workbench/browser/parts/sessions/mobileLayout.js';
+import { AgentWorkbenchLayout, ISessionsHostLayoutService } from '../../../../workbench/services/sessions/browser/sessionsHostLayoutService.js';
 import { ISessionComparisonService } from '../../../../workbench/contrib/sessions/common/sessionComparison.js';
 import { CHAT_WINDOWS_ENABLED_SETTING } from '../../chatWindow/common/chatWindows.js';
 import { buildSessionComparisonAccessibleContent, isJudgeSession, SessionComparisonResultFocused } from '../../../../workbench/contrib/sessions/browser/chat/sessionComparisonResult.js';
-import { SESSION_ACTIVITY_BAR_SETTING, SESSIONS_CHAT_TABS_DEFAULT, SESSIONS_CHAT_TABS_SETTING, SESSIONS_LIST_GROUP_EXTERNAL_SESSIONS_SETTING, SESSIONS_LIST_INBOX_ENABLED_SETTING, SESSIONS_LIST_SHOW_AUTOMATION_SESSIONS_SETTING, SessionsChatTabsMode } from '../../../../workbench/contrib/sessions/common/sessionConfig.js';
+import { SESSION_ACTIVITY_BAR_SETTING, SESSIONS_CHAT_TABS_DEFAULT, SESSIONS_CHAT_TABS_SETTING, SESSIONS_LIST_GROUP_EXTERNAL_SESSIONS_SETTING, SESSIONS_LIST_INBOX_ENABLED_SETTING, SESSIONS_LIST_SHOW_AUTOMATION_SESSIONS_SETTING, SessionsChatTabsMode, SESSIONS_LIST_INLINE_ACTIONS_SETTING } from '../../../../workbench/contrib/sessions/common/sessionConfig.js';
 import { CHAT_AUTOMATIONS_ENABLED_SETTING } from '../../../../workbench/contrib/chat/common/automations/automationsEnabled.js';
 import { AGENT_SESSIONS_APPEARANCE_TOOLS_ENABLED_SETTING, AGENT_SESSIONS_RESPONSE_SELECTION_MENU_SETTING, AGENTS_PICKER_IN_ATTACH_CONTEXT_MENU_SETTING, COMPARE_AGENTS_ENABLED_SETTING, COMPARE_AGENTS_TOOLS_ENABLED_SETTING, ENVIRONMENT_PICKER_MANAGE_REMOTES_SETTING, ENVIRONMENT_PICKER_SETTING, NEW_SESSION_CONNECTOR_RECOMMENDATIONS_SETTING, NEW_SESSION_WELCOME_PHRASES_SETTING, WORKSPACE_OPT_OUT_SETTING } from '../../../../workbench/contrib/sessions/common/chatConstants.js';
 import { logSettingExperimentTrigger } from '../../../../platform/telemetry/common/experimentTrigger.js';
@@ -48,7 +48,7 @@ import { RemoteAgentHostAutoConnectSettingId, RemoteAgentHostsEnabledSettingId }
 import { IChatEntitlementService } from '../../../../workbench/services/chat/common/chatEntitlementService.js';
 import { areDevContainerSamplesEnabled } from '../../../../workbench/contrib/sessions/common/devContainerAgentHostService.js';
 import { CustomizationMarketplaceConfiguration } from '../../../../platform/customizationMarketplace/common/customizationMarketplaceSources.js';
-import { readPaneSessions } from '../../../../workbench/contrib/sessions/browser/sessionGridPane.js';
+import { readPaneSessions } from '../../../../workbench/services/sessions/browser/sessionGridPane.js';
 export class SessionsChatAccessibilityHelp implements IAccessibleViewImplementation {
 	readonly priority = 120;
 	readonly name = 'sessionsChat';
@@ -306,6 +306,9 @@ export class SessionsChatAccessibilityHelp implements IAccessibleViewImplementat
 			content.push(localize('sessionsChat.newChatAgentPicker', "When a session offers more than one harness for its chats, the New Nested Session composer shows the Harness for New Chat picker in its session options, where New Session shows its harness picker, listing those harnesses. When the session options are collapsed, use the session options toggle to show them. Use Tab to reach the picker and Enter or Space to open it, then the arrow keys and Enter to choose the harness for the new chat; a harness that is not available is disabled and describes why. Choosing another harness replaces the unsent new chat. A chat keeps its harness; forks and side chats use the harness of the chat they come from. A chat tab whose harness differs from the session's names that harness, and a Sessions list row whose chats use different harnesses says so."));
 		}
 		const promoteNewChatAction = SessionsListPromoteNewChatActionContext.getValue(accessor.get(IContextKeyService)) ?? SESSIONS_LIST_PROMOTE_NEW_CHAT_ACTION_DEFAULT;
+		if (configurationService.getValue<boolean>(SESSIONS_LIST_INLINE_ACTIONS_SETTING) && !configurationService.getValue<boolean>('chat.disableAIFeatures')) {
+			content.push(localize('sessionsChat.sessionsListInlineActions', "With sessions.list.inlineActions enabled, eligible rows show Fix Checks, Address Comments, or Fix Checks & Address Comments below the metadata. Use Tab or Shift+Tab to reach the button, and Enter or Space to activate it. The request runs in the background without opening the chat. A session row acts on its main chat; a nested chat row acts on that chat, even when multiple sessions are selected. Enabling this setting does not enable Agent Merge or change permissions."));
+		}
 		content.push(promoteNewChatAction
 			? archiveActionWording === ChatSessionArchiveActionWording.MarkAsDone
 				? localize('sessionsChat.sessionsListPromotedNewChatDoneActions', "For non-cloud sessions that support multiple chats, the session row toolbar offers New Nested Session before Mark as Done. Open the session's context menu to pin or unpin it.")

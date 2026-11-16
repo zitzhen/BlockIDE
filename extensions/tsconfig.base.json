@@ -16,6 +16,9 @@
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
 		"forceConsistentCasingInFileNames": true,
-		"experimentalDecorators": true
+		"experimentalDecorators": true,
+		"paths": {
+			"vscode": ["../src/vscode-dts/vscode.d.ts"]
+		}
 	}
 }

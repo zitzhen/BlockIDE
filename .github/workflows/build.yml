@@ -67,7 +67,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm
 
       - name: Install build dependencies (Linux)
         if: inputs.platform == 'linux'
@@ -79,11 +81,11 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # core-ci 负责编译源码并生成 out-vscode-min 等打包产物
       - name: Compile
-        run: npm run gulp core-ci
+        run: pnpm run gulp core-ci
 
       # ---------------------------------------------------------------- Linux
       # 非 -ci 任务会编译内置扩展（含 copilot）并打包；-ci 仅打包，不包含
@@ -94,18 +96,18 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
 
-          npm run gulp vscode-linux-x64-min
+          pnpm run gulp vscode-linux-x64-min
 
           tar -czf "artifacts/BlockIDE-linux-x64-${VERSION}.tar.gz" \
             -C "$(dirname "$GITHUB_WORKSPACE")" VSCode-linux-x64
 
-          npm run gulp vscode-linux-x64-prepare-deb
-          npm run gulp vscode-linux-x64-build-deb
+          pnpm run gulp vscode-linux-x64-prepare-deb
+          pnpm run gulp vscode-linux-x64-build-deb
           DEB_PATH="$(find .build/linux/deb -name '*.deb' -print -quit)"
           cp "$DEB_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.deb"
 
-          npm run gulp vscode-linux-x64-prepare-rpm
-          npm run gulp vscode-linux-x64-build-rpm
+          pnpm run gulp vscode-linux-x64-prepare-rpm
+          pnpm run gulp vscode-linux-x64-build-rpm
           RPM_PATH="$(find .build/linux/rpm -name '*.rpm' -print -quit)"
           cp "$RPM_PATH" "artifacts/BlockIDE-linux-x64-${VERSION}.rpm"
 
@@ -115,7 +117,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run gulp vscode-linux-${VSCODE_ARCH}-prepare-snap
+          pnpm run gulp vscode-linux-${VSCODE_ARCH}-prepare-snap
           SNAP_DIR="$(find ".build/linux/snap/${VSCODE_ARCH}" -maxdepth 1 -mindepth 1 -type d -name 'blockide-*' -print -quit)"
           tar -czf snap-src.tar.gz -C "$(dirname "$SNAP_DIR")" "$(basename "$SNAP_DIR")"
 
@@ -147,10 +149,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           # $ErrorActionPreference 只对 cmdlet 生效，原生进程的非零退出码不会中断脚本，
-          # 因此每个 npm 调用都要显式检查 $LASTEXITCODE。
-          npm run gulp vscode-win32-x64-min
+          # 因此每个 pnpm 调用都要显式检查 $LASTEXITCODE。
+          pnpm run gulp vscode-win32-x64-min
           if ($LASTEXITCODE -ne 0) { throw "gulp vscode-win32-x64-min failed with exit code $LASTEXITCODE" }
-          npm run gulp vscode-win32-x64-inno-updater
+          pnpm run gulp vscode-win32-x64-inno-updater
           if ($LASTEXITCODE -ne 0) { throw "gulp vscode-win32-x64-inno-updater failed with exit code $LASTEXITCODE" }
 
       # 私钥来自 secrets.SIGNATURE_KEYS，证书来自 vars.SIGNATURE_CRT，合成 PFX 后
@@ -196,10 +198,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
 
-          # $ErrorActionPreference 只对 cmdlet 生效；npm/gulp 这类原生进程失败时脚本会继续往下跑，
+          # $ErrorActionPreference 只对 cmdlet 生效；pnpm/gulp 这类原生进程失败时脚本会继续往下跑，
           # v1.0.2 的 MSIX 就是这样在失败后被静默跳过、只发布了 3 个安装包的。
           function Invoke-Gulp([string]$name) {
-            npm run gulp $name
+            pnpm run gulp $name
             if ($LASTEXITCODE -ne 0) { throw "gulp $name failed with exit code $LASTEXITCODE" }
           }
 
@@ -254,7 +256,7 @@ jobs:
         if: inputs.platform == 'darwin'
         run: |
           set -euo pipefail
-          npm run gulp vscode-darwin-arm64-min
+          pnpm run gulp vscode-darwin-arm64-min
 
       # 临时钥匙串路径必须是 $AGENT_TEMPDIRECTORY/buildagent.keychain，build/darwin/sign.ts 依赖它
       - name: Prepare signing certificate (macOS)
@@ -549,17 +551,19 @@ jobs:
         with:
           fetch-depth: 1
           # build/npm/dirs.ts 里包含子模块 extensions/minecraft-workbench，
-          # node_modules 缓存键要读它的 package-lock.json
+          # node_modules 缓存键要读它的 pnpm-lock.yaml
           submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm
 
       # 本 job 只需要运行 gulp 打包任务，不需要编译产物（out/），也不该重付一次
-      # 约 11 分钟的 npm ci。先复用仓库已有的 node_modules 缓存（PR / main 的
+      # 约 11 分钟的 pnpm install。先复用仓库已有的 node_modules 缓存（PR / main 的
       # pr-node-modules 会预热），命中时直接解包；未命中才安装并把结果存回缓存。
       - name: Restore node_modules cache
         id: node-modules-cache
@@ -573,7 +577,7 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Save node_modules cache
         if: steps.node-modules-cache.outputs.cache-hit != 'true'
@@ -628,10 +632,10 @@ jobs:
           $arch = $env:VSCODE_ARCH
           $version = $env:VERSION
 
-          # $ErrorActionPreference 只对 cmdlet 生效；npm/gulp 这类原生进程失败时脚本会继续往下跑，
+          # $ErrorActionPreference 只对 cmdlet 生效；pnpm/gulp 这类原生进程失败时脚本会继续往下跑，
           # v1.0.2 的 MSIX 就是这样在失败后被静默跳过、只发布了 3 个安装包的。
           function Invoke-Gulp([string]$name) {
-            npm run gulp $name
+            pnpm run gulp $name
             if ($LASTEXITCODE -ne 0) { throw "gulp $name failed with exit code $LASTEXITCODE" }
           }
 
