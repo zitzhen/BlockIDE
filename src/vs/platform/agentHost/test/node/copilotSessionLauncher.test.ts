@@ -19,6 +19,7 @@ import { mock, upcastPartial } from '../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { PluginFormat, toParsedAgent, type IMcpServerDefinition, type IParsedRule } from '../../../agentPlugins/common/pluginParsers.js';
 import { ICopilotHomeService } from '../../../environment/common/copilotHome.js';
+import { INativeEnvironmentService } from '../../../environment/common/environment.js';
 import { IFileService, type IFileContent } from '../../../files/common/files.js';
 import { InstantiationService } from '../../../instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../../instantiation/common/serviceCollection.js';
@@ -423,6 +424,7 @@ suite('CopilotSessionLauncher agent catalog readiness', () => {
 
 suite('CopilotSessionLauncher sandbox policy', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
+	const appBundleRoot = URI.file('/application').fsPath;
 
 	function setup(kind: 'create' | 'resume', reportPolicy = true, enforced = false, allowBypass = false, allowOutbound?: boolean, sandboxUpdateError?: Error, sandboxToggles?: Pick<SandboxConfig, 'sandboxMcpServers' | 'sandboxLspServers' | 'allowDevToolAccess' | 'addCurrentWorkingDirectory' | 'auth'>, allowLocalNetwork?: boolean, networkHosts?: Pick<SandboxNetworkPolicy, 'allowedHosts' | 'blockedHosts'>) {
 		const manager = store.add(new AgentHostStateManager(new NullLogService()));
@@ -504,7 +506,10 @@ suite('CopilotSessionLauncher sandbox policy', () => {
 		let attachedSession: CopilotSession | undefined;
 		let sessionClosed = false;
 		const services = new ServiceCollection(
-			[ISessionSandboxPathService, new class extends mock<ISessionSandboxPathService>() { }()],
+			[INativeEnvironmentService, upcastPartial<INativeEnvironmentService>({ appRoot: appBundleRoot, appBundleRoot })],
+			[ISessionSandboxPathService, new class extends mock<ISessionSandboxPathService>() {
+				override async load(): Promise<void> { }
+			}()],
 			[IWorkspaceSandboxPathService, new WorkspaceSandboxPathService(store.add(new AgentHostStorageService(undefined, logService)))],
 			[IAgentConfigurationService, configuration],
 			[IAgentHostStateManager, manager],
@@ -544,7 +549,13 @@ suite('CopilotSessionLauncher sandbox policy', () => {
 				attachedSession = session;
 			},
 		};
-		return { manager, configuration, owner, updates, commands, launcher, plan, runtime, sandbox, raw, logService, set sessionClosed(value: boolean) { sessionClosed = value; }, set sandboxUpdateError(error: Error | undefined) { sandboxUpdateError = error; }, get sandboxState() { return readSessionSandboxState(manager.getSessionState(owner)); }, get disconnected() { return disconnected; }, get captured() { return captured; } };
+		const preparedLauncher = {
+			launch: async (plan: CopilotSessionLaunchPlan, runtime: ICopilotSessionRuntime) => {
+				await sandbox.prepare();
+				return launcher.launch(plan, runtime);
+			},
+		};
+		return { manager, configuration, owner, updates, commands, launcher: preparedLauncher, plan, runtime, sandbox, raw, logService, set sessionClosed(value: boolean) { sessionClosed = value; }, set sandboxUpdateError(error: Error | undefined) { sandboxUpdateError = error; }, get sandboxState() { return readSessionSandboxState(manager.getSessionState(owner)); }, get disconnected() { return disconnected; }, get captured() { return captured; } };
 	}
 
 	test('a sandbox update failing after shutdown does not broadcast a policy conflict', async () => {
@@ -848,7 +859,7 @@ suite('CopilotSessionLauncher sandbox policy', () => {
 				enabled: true,
 				addCurrentWorkingDirectory: true,
 				auth: { git: true, gh: true },
-				userPolicy: { filesystem: { readonlyPaths: [URI.file('/session-data/sess-1/attachments').fsPath] } },
+				userPolicy: { filesystem: { readonlyPaths: [appBundleRoot, URI.file('/session-data/sess-1/attachments').fsPath] } },
 			}],
 		});
 	});
@@ -885,7 +896,7 @@ suite('CopilotSessionLauncher sandbox policy', () => {
 			assert.deepStrictEqual(attempts, [true, false]);
 		});
 
-		test(`${kind} applies attachment read roots at launch and does not resend them at the first turn`, async () => {
+		test(`${kind} applies application and attachment read roots at launch and does not resend them at the first turn`, async () => {
 			const fixture = setup(kind);
 			fixture.configuration.updateSessionConfig(fixture.owner, { sandboxEnabled: 'on' });
 
@@ -896,7 +907,7 @@ suite('CopilotSessionLauncher sandbox policy', () => {
 				enabled: true,
 				addCurrentWorkingDirectory: true,
 				auth: { git: true, gh: true },
-				userPolicy: { filesystem: { readonlyPaths: [URI.file('/session-data/sess-1/attachments').fsPath] } },
+				userPolicy: { filesystem: { readonlyPaths: [appBundleRoot, URI.file('/session-data/sess-1/attachments').fsPath] } },
 			};
 			assert.deepStrictEqual(fixture.updates.filter(update => update.sandboxConfig).map(update => update.sandboxConfig), [expected]);
 		});
@@ -1228,7 +1239,7 @@ suite('CopilotSessionLauncher sandbox policy', () => {
 				policy: fixture.configuration.getSessionSandboxPolicy(fixture.owner),
 				stored: fixture.configuration.getRootConfigValues()?.sandbox,
 			}, {
-				applied: [{ enabled: true, addCurrentWorkingDirectory: true, allowBypass: false, auth: { git: true, gh: true }, userPolicy: { filesystem: { readonlyPaths: [URI.file('/session-data/sess-1/attachments').fsPath] }, network: { allowOutbound: false } } }],
+				applied: [{ enabled: true, addCurrentWorkingDirectory: true, allowBypass: false, auth: { git: true, gh: true }, userPolicy: { filesystem: { readonlyPaths: [appBundleRoot, URI.file('/session-data/sess-1/attachments').fsPath] }, network: { allowOutbound: false } } }],
 				policy: { enabled: true, allowBypass: false, allowOutbound: false },
 				stored: { enabled: 'off', allowNetwork: true, allowUnsandboxedCommands: false },
 			});
