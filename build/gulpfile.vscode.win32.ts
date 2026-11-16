@@ -166,6 +166,15 @@ task.task(task.define('vscode-win32-x64-inno-updater', task.series(copyInnoUpdat
 task.task(task.define('vscode-win32-arm64-inno-updater', task.series(copyInnoUpdater('arm64'), updateIcon(path.join(buildPath('arm64'), 'tools', 'inno_updater.exe')))));
 
 const managedPackageDir = (arch: string, kind: 'msi' | 'msix') => path.join(repoPath, '.build', `win32-${arch}`, kind);
+
+/**
+ * WiX 3 links every staged file through the classic Win32 APIs, which stop at MAX_PATH. The
+ * payload mirrors the whole client, and a pnpm-installed node_modules nests deeply enough that
+ * `<repo>/.build/win32-<arch>/<kind>/payload/...` exceeds 260 characters, where light.exe then
+ * fails with LGHT0103 for a file that exists. Stage next to the repository instead: the shorter
+ * prefix keeps every file under the limit.
+ */
+const managedPayloadDir = (arch: string, kind: 'msi' | 'msix') => path.join(path.dirname(repoPath), `bld-${arch}-${kind}`);
 const iconPath = path.join(repoPath, 'resources', 'win32', 'code.ico');
 const aboutUrl = 'https://github.com/zitzhen/BlockIDE';
 
@@ -258,7 +267,7 @@ function buildWin32Msi(arch: string): task.CallbackTask {
 			}
 
 			const outputPath = managedPackageDir(arch, 'msi');
-			const payloadPath = path.join(outputPath, 'payload');
+			const payloadPath = managedPayloadDir(arch, 'msi');
 			fs.mkdirSync(outputPath, { recursive: true });
 			prepareManagedPayload(sourcePath, payloadPath, getVersionedResourcesFolder());
 
@@ -324,7 +333,7 @@ function buildWin32Msix(arch: string): task.CallbackTask {
 			}
 
 			const outputPath = managedPackageDir(arch, 'msix');
-			const payloadPath = path.join(outputPath, 'payload');
+			const payloadPath = managedPayloadDir(arch, 'msix');
 			fs.mkdirSync(outputPath, { recursive: true });
 			prepareManagedPayload(sourcePath, payloadPath, getVersionedResourcesFolder());
 
