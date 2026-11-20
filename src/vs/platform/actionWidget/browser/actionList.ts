@@ -410,6 +410,7 @@ class ActionItemRenderer<T> implements IListRenderer<IActionListItem<T>, IAction
 
 		const icon = document.createElement('div');
 		icon.className = 'icon';
+		icon.ariaHidden = 'true';
 		container.append(icon);
 
 		const labelIcon = dom.append(container, dom.$('span.action-list-label-icon', { 'aria-hidden': 'true' }));
@@ -444,6 +445,7 @@ class ActionItemRenderer<T> implements IListRenderer<IActionListItem<T>, IAction
 
 		const submenuIndicator = document.createElement('div');
 		submenuIndicator.className = 'action-list-submenu-indicator';
+		submenuIndicator.ariaHidden = 'true';
 		container.append(submenuIndicator);
 
 		const inlineToggleContainer = document.createElement('div');
@@ -474,7 +476,7 @@ class ActionItemRenderer<T> implements IListRenderer<IActionListItem<T>, IAction
 			return;
 		}
 
-		dom.setVisibility(!element.hideIcon, data.icon);
+		data.icon.style.display = element.hideIcon ? 'none' : '';
 		data.labelIcon.className = element.labelIcon
 			? `action-list-label-icon ${ThemeIcon.asClassName(element.labelIcon)}`
 			: 'action-list-label-icon';
@@ -649,7 +651,7 @@ class ActionItemRenderer<T> implements IListRenderer<IActionListItem<T>, IAction
 			toolbarActions.push(toAction({
 				id: removeToolbarActionId,
 				label: localize('actionList.remove', "Remove"),
-				class: ThemeIcon.asClassName(Codicon.close),
+				class: ThemeIcon.asClassName(Codicon.closeSmall),
 				run: async () => {
 					await element.onRemove!();
 					this._onRemoveItem?.(element);
@@ -2705,7 +2707,7 @@ export class ActionListWidget<T> extends Disposable {
 		if (index < 0) {
 			return null;
 		}
-		// eslint-disable-next-line no-restricted-syntax
+		// eslint-disable-next-line eslint-js/no-restricted-syntax
 		return this.domNode.ownerDocument.getElementById(this._list.getElementID(index));
 	}
 
@@ -3774,7 +3776,9 @@ export class ActionList<T> extends Disposable {
 		const viewportMaxHeight = this._useFullHeight ? targetWindow.innerHeight : Math.floor(targetWindow.innerHeight * 0.6);
 		const actionLineHeight = this._widget.lineHeight;
 		if (this._anchorPosition !== undefined || this._preferredAnchorPosition !== undefined) {
-			const maxHeight = Math.min(availableHeight, viewportMaxHeight);
+			// ContextView measures integer offsetHeight. Rounding up a fractional fit
+			// would make it overflow the anchor's space and fall back to its side.
+			const maxHeight = Math.floor(Math.min(availableHeight, viewportMaxHeight));
 			const height = Math.min(listHeight + chromeHeight, Math.max(0, maxHeight));
 			return Math.max(0, height - chromeHeight);
 		}

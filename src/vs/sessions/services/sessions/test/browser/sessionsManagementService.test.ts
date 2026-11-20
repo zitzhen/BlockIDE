@@ -5804,6 +5804,69 @@ suite('SessionsManagementService', () => {
 		});
 	});
 
+	for (const { timing, preserveCustomView } of [
+		{ timing: 'before', preserveCustomView: false },
+		{ timing: 'during', preserveCustomView: false },
+		{ timing: 'during', preserveCustomView: true },
+	] as const) {
+		test(`restoreVisibleSessions ${preserveCustomView ? 'does not surface the hidden' : 'retains the visible'} workspace draft created ${timing} startup restoration`, async () => {
+			const folderUri = URI.file('/project');
+			const workspace: ISessionWorkspace = {
+				uri: folderUri,
+				label: 'project',
+				icon: Codicon.folder,
+				folders: [{ root: folderUri, workingDirectory: folderUri, name: 'project', description: undefined }],
+				requiresWorkspaceTrust: false,
+				isVirtualWorkspace: false,
+			};
+			const draft = stubSession({
+				sessionId: 'workspace-draft',
+				providerId: 'test',
+				status: constObservable(SessionStatus.Untitled),
+				workspace: constObservable(workspace),
+			});
+			const requests: { sessionId: string; chatResource: URI; query: string }[] = [];
+			const provider = new class extends TestSessionsProvider {
+				override getSessions(): ISession[] { return []; }
+				override resolveWorkspace(): ISessionWorkspace { return workspace; }
+				override async sendRequest(sessionId: string, chatResource: URI, options: ISendRequestOptions): Promise<ISession> {
+					requests.push({ sessionId, chatResource, query: options.query });
+					return draft;
+				}
+			}(draft);
+			const { service, view } = createSessionsManagementService(draft, disposables, provider);
+			let restoring: Promise<void> | undefined;
+			if (timing === 'during') {
+				restoring = view.restoreVisibleSessions();
+			}
+			await view.openNewSession({ folderUri, preserveNavigation: true, preserveCustomView });
+			await (restoring ?? view.restoreVisibleSessions());
+
+			const active = activeSessionOf(view);
+			const restored = {
+				visible: slotSessionsOf(view).map(session => session?.sessionId),
+				active: active?.sessionId,
+				workspace: active?.workspace.get(),
+				pending: service.newSession.get()?.sessionId,
+				restoreComplete: view.initialRestoreComplete.get(),
+			};
+			if (!preserveCustomView && active) {
+				await service.sendNewChatRequest(active, { query: 'hello' });
+			}
+
+			assert.deepStrictEqual({ restored, requests }, {
+				restored: {
+					visible: [preserveCustomView ? undefined : draft.sessionId],
+					active: preserveCustomView ? undefined : draft.sessionId,
+					workspace: preserveCustomView ? undefined : workspace,
+					pending: draft.sessionId,
+					restoreComplete: true,
+				},
+				requests: preserveCustomView ? [] : [{ sessionId: draft.sessionId, chatResource: draft.mainChat.get().resource, query: 'hello' }],
+			});
+		});
+	}
+
 	test('restoreVisibleSessions prepares only the active session', async () => {
 		const session = stubSession({
 			sessionId: 'remote',
@@ -6534,6 +6597,46 @@ suite('SessionsManagementService', () => {
 
 		assert.deepStrictEqual(service.getInFlightNewSessionRequests(), []);
 	});
+
+	for (const background of [false, true]) {
+		for (const quickChat of [false, true]) {
+			test(`rejects an unavailable ${quickChat ? 'quick-chat' : 'workspace'} type before consuming a ${background ? 'background' : 'foreground'} draft`, async () => {
+				const session = stubSession({
+					sessionId: 'draft', providerId: 'test',
+					status: constObservable(SessionStatus.Untitled),
+					isQuickChat: constObservable(quickChat),
+				});
+				const calls: string[] = [];
+				const provider = new class extends TestSessionsProvider {
+					override readonly sessionTypes: ISessionType[] = [{ id: 'test', label: 'Test', icon: Codicon.vm, authRequirement: SessionTypeAuthRequirement.GitHub }];
+					override readonly supportsQuickChats = true;
+					override createQuickChat() { return session; }
+					override resolveWorkspace(folderUri: URI): ISessionWorkspace {
+						return { uri: folderUri, label: 'Workspace', icon: Codicon.folder, folders: [], requiresWorkspaceTrust: false, isVirtualWorkspace: false };
+					}
+					override async prepareNewSession(): Promise<never> {
+						calls.push('prepare');
+						throw new Error('unavailable');
+					}
+					override deleteNewSession() { calls.push('delete'); }
+					override async sendRequest() { calls.push('send'); return session; }
+				}(session);
+				const { service } = createSessionsManagementService(session, disposables, provider);
+				const draft = quickChat ? service.createQuickChat() : service.createNewSession(URI.file('/workspace'));
+				provider.sessionTypes.splice(0);
+				const draftChanges: (string | undefined)[] = [];
+				disposables.add(autorun(reader => draftChanges.push(service.newSession.read(reader)?.sessionId)));
+
+				await assert.rejects(service.sendNewChatRequest(draft, { query: 'keep my prompt', background }), /Test is no longer available for new sessions/);
+
+				assert.deepStrictEqual({
+					calls, draftChanges,
+					draft: service.newSession.get()?.sessionId,
+					inFlight: service.getInFlightNewSessionRequests(),
+				}, { calls: [], draftChanges: ['draft'], draft: 'draft', inFlight: [] });
+			});
+		}
+	}
 
 	test('sendNewChatRequest with background resolves before preparation and routes the replacement in the background', async () => {
 		const chat: IChat = { ...stubChat, resource: URI.parse('test:///chat') };
@@ -9435,6 +9538,62 @@ suite('SessionsManagementService', () => {
 				forMainChat: { revealed: ['/chat/mainB'], active: 'A' },
 				otherwise: { revealed: ['/chat/mainB'], active: 'B', activeChat: 'peerB' },
 			});
+		});
+
+		for (const origin of [ChatOriginKind.SideChat, ChatOriginKind.Fork, ChatOriginKind.Tool]) {
+			for (const toSide of [false, true]) {
+				test(`a ${origin} chat opened ${toSide ? 'to the side ' : ''}with a reference chat that a chat window shows opens beside it in that window, not in the grid`, async () => {
+					const sessionB = multiChatSession('B', [chat('mainB'), chat('newB', SessionStatus.Completed, origin)]);
+					const [mainB, newB] = sessionB.chats.get();
+					const { view } = setup([sessionB]);
+					await view.openSession(sessionB.resource);
+					const beside: string[] = [];
+					disposables.add(chatHostOpeners.get(view)!.register({
+						showsChat: shown => shown.toString() === mainB.resource.toString(),
+						reveal: async () => { },
+						openBeside: async (opened, reference) => { beside.push(`${opened.path} beside ${reference.path}`); },
+						close: async () => ({ restore: async () => { } }),
+					}));
+					const gridBefore = { active: activeChatOf(view)?.title.get(), closed: closedTitles(view) };
+
+					if (toSide) {
+						await view.openChatToSide(sessionB, newB.resource, { referenceChatResource: mainB.resource });
+					} else {
+						await view.openChat(sessionB, newB.resource, { referenceChatResource: mainB.resource });
+					}
+
+					assert.deepStrictEqual({ beside, grid: { active: activeChatOf(view)?.title.get(), closed: closedTitles(view) } }, {
+						beside: ['/chat/newB beside /chat/mainB'],
+						grid: gridBefore,
+					});
+				});
+			}
+		}
+
+		test('a chat opened with a reference chat that no opener shows any more opens in the grid, whatever other openers show', async () => {
+			const sessionB = multiChatSession('B', [chat('mainB'), chat('newB', SessionStatus.Completed, ChatOriginKind.SideChat)]);
+			const [mainB, newB] = sessionB.chats.get();
+			const { view } = setup([sessionB]);
+			await view.openSession(sessionB.resource);
+			const beside: string[] = [];
+			let windowShowsReference = true;
+			disposables.add(chatHostOpeners.get(view)!.register({
+				showsChat: shown => windowShowsReference && shown.toString() === mainB.resource.toString(),
+				reveal: async () => { },
+				openBeside: async opened => { beside.push(`closing window ${opened.path}`); },
+				close: async () => ({ restore: async () => { } }),
+			}));
+			disposables.add(chatHostOpeners.get(view)!.register({
+				showsChat: shown => shown.toString() === 'test:///other',
+				reveal: async () => { },
+				openBeside: async opened => { beside.push(`other window ${opened.path}`); },
+				close: async () => ({ restore: async () => { } }),
+			}));
+			windowShowsReference = false;
+
+			await view.openChat(sessionB, newB.resource, { referenceChatResource: mainB.resource });
+
+			assert.deepStrictEqual({ beside, active: activeChatOf(view)?.title.get() }, { beside: [], active: 'newB' });
 		});
 
 		test('a session-list open selects the main chat instead of the previously active chat', async () => {

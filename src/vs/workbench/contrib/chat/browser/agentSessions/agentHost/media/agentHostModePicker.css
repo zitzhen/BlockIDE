@@ -131,7 +131,7 @@
 	display: flex;
 	height: var(--chat-input-control-height);
 	padding: 0;
-	border-radius: var(--vscode-cornerRadius-small);
+	border-radius: var(--workbench-custom-buttons-corner-radius, var(--vscode-cornerRadius-small));
 	overflow: visible;
 	background: transparent;
 	color: var(--vscode-icon-foreground);
@@ -148,10 +148,6 @@
 .sessions-chat-picker-slot .action-label.agent-host-mode-permissions-trigger[data-mode-permissions-picker-open='true'],
 .agent-host-chat-input-picker-slot .action-label.agent-host-mode-permissions-trigger[data-mode-permissions-picker-open='true'] {
 	background-color: var(--vscode-toolbar-hoverBackground);
-}
-
-.monaco-workbench .monaco-action-bar:not(.vertical) .action-item .action-label.agent-host-mode-permissions-trigger:hover:not(.disabled) {
-	outline: none;
 }
 
 .agent-host-permissions-button .agent-host-mode-permission-summary {

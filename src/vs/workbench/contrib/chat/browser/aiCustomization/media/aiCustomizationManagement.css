@@ -828,6 +828,43 @@ per-word capitalization does not survive translation. */
 	line-height: 16px;
 }
 
+/* "Managed by your organization" tag for customizations controlled by the user's organization */
+.inline-badge.organization-managed-tag {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--vscode-spacing-size20);
+}
+
+.inline-badge.organization-managed-tag .codicon {
+	font-size: var(--vscode-codiconFontSize-compact);
+}
+
+/* Notice explaining an organization restriction on a whole section */
+.organization-policy-notice {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--vscode-spacing-size80);
+	margin: 0 0 var(--vscode-spacing-size80) 0;
+	padding: var(--vscode-spacing-size60) var(--vscode-spacing-size80);
+	border-radius: var(--vscode-cornerRadius-medium);
+	border: 1px solid var(--vscode-widget-border, transparent);
+	background: var(--vscode-textBlockQuote-background);
+	font-size: var(--vscode-fontSize-body1);
+	line-height: 1.45;
+	color: var(--vscode-foreground);
+}
+
+.organization-policy-notice .organization-policy-notice-icon {
+	flex-shrink: 0;
+	font-size: var(--vscode-codiconFontSize);
+	line-height: 1.45;
+	color: var(--vscode-descriptionForeground);
+}
+
+.organization-policy-notice .organization-policy-notice-message {
+	min-width: 0;
+}
+
 /* Status icon for remote customization items (loading/loaded/degraded/error) */
 .ai-customization-list-item .item-status-icon {
 	flex-shrink: 0;
@@ -976,6 +1013,7 @@ per-word capitalization does not survive translation. */
 
 .ai-customization-list-item:hover .item-right,
 .ai-customization-list-item:focus-within .item-right,
+.ai-customization-list-item.menu-open .item-right,
 .monaco-list-row.focused .ai-customization-list-item .item-right {
 	opacity: 1;
 }
@@ -987,7 +1025,7 @@ per-word capitalization does not survive translation. */
 	padding: 0;
 	align-items: center;
 	justify-content: center;
-	border-radius: var(--vscode-cornerRadius-small);
+	border-radius: var(--workbench-custom-buttons-corner-radius, var(--vscode-cornerRadius-small));
 }
 
 /* Highlighted matches */
@@ -1038,7 +1076,7 @@ per-word capitalization does not survive translation. */
 	width: var(--vscode-spacing-size240);
 	min-width: var(--vscode-spacing-size240);
 	padding: var(--vscode-spacing-sizeNone);
-	border-radius: var(--vscode-cornerRadius-small);
+	border-radius: var(--workbench-custom-buttons-corner-radius, var(--vscode-cornerRadius-small));
 }
 
 .ai-customization-list-widget .section-title-header .section-title-back-slot,
@@ -1982,7 +2020,7 @@ per-word capitalization does not survive translation. */
 	gap: var(--vscode-spacing-size120);
 	width: 100%;
 	padding: var(--vscode-spacing-size40) var(--vscode-spacing-size60);
-	border-radius: var(--vscode-cornerRadius-small);
+	border-radius: var(--workbench-custom-buttons-corner-radius, var(--vscode-cornerRadius-small));
 	text-align: left;
 }
 
@@ -2197,7 +2235,7 @@ per-word capitalization does not survive translation. */
 .ai-customization-management-editor .ai-customization-embedded-detail .embedded-detail-title-actions .monaco-button-dropdown:focus-within {
 	outline: var(--vscode-strokeThickness) solid var(--vscode-focusBorder);
 	outline-offset: -1px;
-	border-radius: var(--vscode-cornerRadius-small);
+	border-radius: var(--workbench-custom-buttons-corner-radius, var(--vscode-cornerRadius-small));
 }
 
 .ai-customization-management-editor .ai-customization-embedded-detail .embedded-detail-title-actions .monaco-button-dropdown > .monaco-button:focus {
@@ -3017,7 +3055,7 @@ per-word capitalization does not survive translation. */
 	min-height: var(--vscode-spacing-size240);
 	padding: 0 var(--vscode-spacing-size80);
 	font-size: var(--vscode-fontSize-label1);
-	border-radius: var(--vscode-cornerRadius-small);
+	border-radius: var(--workbench-custom-buttons-corner-radius, var(--vscode-cornerRadius-small));
 }
 
 .mcp-server-item .mcp-server-sign-in.monaco-button:hover,
@@ -3291,25 +3329,31 @@ per-word capitalization does not survive translation. */
 	color: var(--vscode-textPreformat-foreground, var(--vscode-descriptionForeground));
 }
 
-.plugin-list-widget .plugin-list-item-status {
+.plugin-list-widget .plugin-list-item-status-icon {
 	flex-shrink: 0;
-	font-size: var(--vscode-agents-fontSize-label2);
-	font-weight: var(--vscode-agents-fontWeight-semiBold);
-	line-height: 18px;
-	padding: 0 var(--vscode-spacing-size80);
-	border-radius: var(--vscode-cornerRadius-circle);
-	color: var(--vscode-badge-foreground);
-	background-color: var(--vscode-badge-background);
+	width: var(--vscode-spacing-size160);
+	height: var(--vscode-spacing-size160);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: var(--vscode-codiconFontSize);
+	color: var(--vscode-descriptionForeground);
 }
 
-.plugin-list-widget .plugin-list-item-status.running {
-	color: var(--vscode-editor-background);
-	background-color: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 50%, transparent);
+.plugin-list-widget .plugin-list-item-status-icon.loading {
+	color: var(--vscode-progressBar-background, var(--vscode-icon-foreground));
 }
 
-.plugin-list-widget .plugin-list-item-status.disabled {
-	color: var(--vscode-badge-foreground);
-	background-color: color-mix(in srgb, var(--vscode-badge-background) 50%, transparent);
+.monaco-reduce-motion .plugin-list-widget .plugin-list-item-status-icon.loading {
+	animation: none;
+}
+
+.plugin-list-widget .plugin-list-item-status-icon.warning {
+	color: var(--vscode-list-warningForeground, var(--vscode-editorWarning-foreground));
+}
+
+.plugin-list-widget .plugin-list-item-status-icon.error {
+	color: var(--vscode-errorForeground);
 }
 
 .plugin-list-widget .plugin-list-item-action {
@@ -3329,7 +3373,7 @@ per-word capitalization does not survive translation. */
 	min-width: var(--vscode-spacing-size240);
 	height: var(--vscode-spacing-size240);
 	padding: 0;
-	border-radius: var(--vscode-cornerRadius-small);
+	border-radius: var(--workbench-custom-buttons-corner-radius, var(--vscode-cornerRadius-small));
 	border-color: transparent;
 	background: transparent;
 	color: var(--vscode-foreground);
@@ -3349,7 +3393,7 @@ per-word capitalization does not survive translation. */
 	min-width: var(--vscode-spacing-size240);
 	height: var(--vscode-spacing-size240);
 	padding: 0;
-	border-radius: var(--vscode-cornerRadius-small);
+	border-radius: var(--workbench-custom-buttons-corner-radius, var(--vscode-cornerRadius-small));
 	border-color: transparent;
 	background: transparent;
 	color: var(--vscode-foreground);
@@ -3711,7 +3755,7 @@ per-word capitalization does not survive translation. */
 	min-width: var(--vscode-spacing-size240);
 	height: var(--vscode-spacing-size240);
 	padding: 0;
-	border-radius: var(--vscode-cornerRadius-small);
+	border-radius: var(--workbench-custom-buttons-corner-radius, var(--vscode-cornerRadius-small));
 	border-color: transparent;
 	background: transparent;
 	color: var(--vscode-foreground);
@@ -3738,7 +3782,7 @@ per-word capitalization does not survive translation. */
 	min-width: var(--vscode-spacing-size240);
 	height: var(--vscode-spacing-size240);
 	padding: 0;
-	border-radius: var(--vscode-cornerRadius-small);
+	border-radius: var(--workbench-custom-buttons-corner-radius, var(--vscode-cornerRadius-small));
 	background: transparent;
 	color: var(--vscode-foreground);
 	border-color: transparent;

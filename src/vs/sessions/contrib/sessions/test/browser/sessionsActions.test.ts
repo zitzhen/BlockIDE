@@ -75,6 +75,7 @@ import { IAgentHostSessionsProvider } from '../../../../../workbench/contrib/ses
 import { IsAuxiliaryWindowContext, IsSessionsWindowContext } from '../../../../../workbench/common/contextkeys.js';
 import { IFocusedSessionHostService, ISessionHost, ISessionHostService, SessionHostKind } from '../../../../../workbench/services/sessions/browser/sessionHost.js';
 import { IChatWindow, IChatWindowService } from '../../../../../workbench/contrib/chatWindow/browser/chatWindow.js';
+import { ISessionEditorWorkingSetService, SessionEditorWorkingSetService } from '../../../layout/common/sessionEditorWorkingSet.js';
 import { IAgentWorkbenchLayoutService } from '../../../../browser/workbench.js';
 import { ChatHostOpenerService, IChatHostOpenerService } from '../../../../../workbench/services/sessions/browser/chatHostOpener.js';
 import { ChatContextKeys } from '../../../../../workbench/contrib/chat/common/actions/chatContextKeys.js';
@@ -214,7 +215,7 @@ suite('Sessions - Actions', () => {
 		}, {
 			toolbar: [
 				{ id: 'sessions.chatCompositeBar.addChat', group: 'navigation', order: 1, when: 'sessionSupportsMultipleChats && sessionsListPromoteNewChatAction && !sessionIsArchived && !sessionItem.inExternalSection && !sessionItem.isCloud' },
-				{ id: ARCHIVE_SESSION_COMMAND_ID, group: 'navigation', order: 3, when: 'chatIsEnabled && !sessionIsArchived && sessionsViewPane.grouping == \'inbox\'' },
+				{ id: ARCHIVE_SESSION_COMMAND_ID, group: 'navigation', order: 3, when: 'chatIsEnabled && !sessionIsArchived && sessionItem.inboxState == \'done\' && sessionsViewPane.grouping == \'inbox\'' },
 				{ id: ARCHIVE_SESSION_COMMAND_ID, group: 'navigation', order: 2, when: '!sessionIsArchived && sessionsViewPane.grouping != \'inbox\'' },
 				{ id: 'sessionsViewPane.pinSession', group: 'navigation', order: 1, when: '!sessionIsArchived && !sessionItem.isPinned && !sessionsListPromoteNewChatAction' },
 				{ id: 'sessionsViewPane.unpinSession', group: 'navigation', order: 1, when: 'sessionItem.isPinned && !sessionIsArchived && !sessionsListPromoteNewChatAction' },
@@ -2786,6 +2787,7 @@ suite('Sessions - Actions', () => {
 		instantiationService.stub(ISessionsService, upcastPartial<ISessionsService>({ slotPanes: constObservable([]) }));
 		instantiationService.stub(IEditorGroupsService, upcastPartial<IEditorGroupsService>({ mainPart: upcastPartial<IEditorGroupsService['mainPart']>({ groups: [] }) }));
 		instantiationService.stub(IAgentWorkbenchLayoutService, upcastPartial<IAgentWorkbenchLayoutService>({}));
+		instantiationService.stub(ISessionEditorWorkingSetService, new SessionEditorWorkingSetService());
 		instantiationService.stub(ISessionHostService, upcastPartial<ISessionHostService>({ getHostOfWindow: () => upcastPartial<ISessionHost>({ kind: SessionHostKind.MainWindow, session: constObservable(undefined), chat: constObservable(undefined) }) }));
 		const picked = upcastPartial<ISession>({ sessionId: 'picked', resource: URI.parse('test-session:/picked') });
 		await instantiationService.invokeFunction(accessor => openPickedSessionInChatWindow(accessor, picked, chatWindow, { preserveFocus: false, toSide: false }));

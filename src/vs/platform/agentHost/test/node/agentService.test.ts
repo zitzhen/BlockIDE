@@ -24,7 +24,7 @@ import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { CancellationError } from '../../../../base/common/errors.js';
 import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { DisposableStore, IDisposable, IReference, toDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, IDisposable, IReference, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { constObservable, waitForState } from '../../../../base/common/observable.js';
 import { join } from '../../../../base/common/path.js';
@@ -103,6 +103,8 @@ import type { IAgentHostStorageService } from '../../node/agentHostStorageServic
 import { AGENT_HOST_CATALOG_VERIFICATION_VERSION_STORAGE_KEY, CATALOG_VERIFICATION_VERSION, type IAgentHostCatalogReconciliationReport } from '../../node/agentHostCatalogReconciliationService.js';
 import { AgentSessionRegistry, type IRegisteredSession } from '../../node/agentSessionRegistry.js';
 import { AgentHostManagementService } from '../../node/agentHostManagementService.js';
+import { AGENT_HOST_TELEMETRY_FLUSH_TIMEOUT_MS, AgentHostTelemetryService } from '../../node/agentHostTelemetryService.js';
+import type { IAgentHostChatContribution, IAgentHostChatContributionContext, IAgentHostChatContributions } from '../../common/agentHostChatContributionsService.js';
 import { AgentHostSystemWakeService } from '../../node/agentHostSystemWakeService.js';
 import type { IAgentHostTurnTracker } from '../../node/agentHostTurnTracker.js';
 import { AGENT_HOST_TITLE_SOURCE_AGENT, AGENT_HOST_TITLE_SOURCE_AUTO, AGENT_HOST_TITLE_SOURCE_USER, customChatTitleMetadataKey, customChatTitleSourceMetadataKey, SESSION_ARTIFACTS_KEY, SESSION_CUSTOM_TITLE_KEY, SESSION_CUSTOM_TITLE_SOURCE_KEY, SESSION_ORIGIN_KEY, SESSION_WORKING_DIRECTORIES_KEY } from '../../node/shared/persistSessionMetadata.js';
@@ -1193,7 +1195,7 @@ suite('AgentService (node dispatcher)', () => {
 		await assert.rejects(service.manageHostSandboxCertificate(provider.id, 'install'), /unavailable/);
 		const calls: string[] = [];
 		provider.manageHostSandboxCertificate = async operation => { calls.push(operation); };
-		const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+		const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 		for (const operation of ['install', 'rotate', 'remove'] as const) {
 			await managementService.manageHostSandboxCertificate(provider.id, operation);
 		}
@@ -1215,7 +1217,7 @@ suite('AgentService (node dispatcher)', () => {
 			provider[operation] = async (chat, scopeId) => { calls.push([chat, scopeId]); };
 			await assert.rejects(service[operation]('conversation://missing/chat', 'runtime'), /unavailable/);
 			await assert.rejects(service[operation](URI.parse(chat).toString(), 'runtime'), /unavailable/);
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 			await managementService[operation](chat, 'runtime');
 			assert.deepStrictEqual(calls, [[chat, 'runtime']]);
 		});
@@ -3792,7 +3794,7 @@ suite('AgentService (node dispatcher)', () => {
 				managedKeys: ['permissions'],
 			});
 			registerTestAgentProvider(service, provider);
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			assert.deepStrictEqual(await managementService.getManagedSettingsDiagnostics(), [{
 				provider: 'copilot',
@@ -3820,7 +3822,7 @@ suite('AgentService (node dispatcher)', () => {
 			registerTestAgentProvider(service, provider);
 			registerTestAgentProvider(service, otherProvider);
 			registerTestAgentProvider(service, unsupportedProvider);
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			await managementService.refreshCopilotConnectorSessions();
 			await managementService.refreshCopilotConnectorSessions('mail');
@@ -3835,18 +3837,19 @@ suite('AgentService (node dispatcher)', () => {
 			const provider: IAgent = copilotAgent;
 			provider.installPlugin = async (request, operationSession) => { calls.push(['install', request, operationSession?.toString()]); };
 			provider.uninstallPlugin = async (request, operationSession) => { calls.push(['uninstall', request, operationSession?.toString()]); };
-			provider.setPluginEnabled = async (plugin, enabled) => { calls.push(['enablement', plugin, enabled]); };
+			provider.setPluginEnabled = async (plugin, enabled, scope, operationSession, operationChat) => { calls.push(['enablement', plugin, enabled, scope, operationSession?.toString(), operationChat?.toString()]); };
 			provider.listPluginInstallations = async (operationSession, operationChat) => {
 				calls.push(['inventory', operationSession?.toString(), operationChat?.toString()]);
 				return [{ name: 'spark', marketplace: 'copilot-plugins' }];
 			};
 			registerTestAgentProvider(service, provider);
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			await managementService.installPlugin(provider.id, { source: 'spark@copilot-plugins' }, session);
 			await managementService.uninstallPlugin(provider.id, { name: 'spark', marketplace: 'copilot-plugins' }, session);
-			await managementService.setPluginEnabled(provider.id, 'direct-source', true);
-			await managementService.setPluginEnabled(provider.id, 'spark@copilot-plugins', false);
+			await managementService.setPluginEnabled(provider.id, 'direct-source', true, 'global');
+			await managementService.setPluginEnabled(provider.id, 'spark@copilot-plugins', false, 'global', session, chat);
+			await managementService.setPluginEnabled(provider.id, 'spark@copilot-plugins', true, 'repository', session, chat);
 			const inventory = await managementService.listPluginInstallations(provider.id, session, chat);
 
 			assert.deepStrictEqual({ inventory, calls }, {
@@ -3854,13 +3857,14 @@ suite('AgentService (node dispatcher)', () => {
 				calls: [
 					['install', { source: 'spark@copilot-plugins' }, session.toString()],
 					['uninstall', { name: 'spark', marketplace: 'copilot-plugins' }, session.toString()],
-					['enablement', 'direct-source', true],
-					['enablement', 'spark@copilot-plugins', false],
+					['enablement', 'direct-source', true, 'global', undefined, undefined],
+					['enablement', 'spark@copilot-plugins', false, 'global', session.toString(), chat.toString()],
+					['enablement', 'spark@copilot-plugins', true, 'repository', session.toString(), chat.toString()],
 					['inventory', session.toString(), chat.toString()],
 				],
 			});
 			provider.setPluginEnabled = async () => { throw new Error('managed policy refused'); };
-			await assert.rejects(managementService.setPluginEnabled(provider.id, 'direct-source', true), /managed policy refused/);
+			await assert.rejects(managementService.setPluginEnabled(provider.id, 'direct-source', true, 'global'), /managed policy refused/);
 		});
 
 		test('manages plugin marketplaces through the owning provider', async () => {
@@ -3868,15 +3872,15 @@ suite('AgentService (node dispatcher)', () => {
 			const session = URI.parse('agent-host-copilotcli:/session');
 			const provider: IAgent = copilotAgent;
 			provider.listPluginMarketplaces = async session => {
-				calls.push(['list', session.toString()]);
+				calls.push(['list', session?.toString()]);
 				return [{ name: 'marketplace', source: 'owner/repository', isDefault: false, managed: false, available: true }];
 			};
 			provider.addPluginMarketplace = async (session, source) => {
-				calls.push(['add', session.toString(), source]);
+				calls.push(['add', session?.toString(), source]);
 				return { name: 'marketplace', source, isDefault: false, managed: false, available: true };
 			};
 			provider.browsePluginMarketplace = async (session, name) => {
-				calls.push(['browse', session.toString(), name]);
+				calls.push(['browse', session?.toString(), name]);
 				return [{ name: 'plugin', description: 'Plugin description' }];
 			};
 			provider.removePluginMarketplace = async (session, name, force) => {
@@ -3888,7 +3892,7 @@ suite('AgentService (node dispatcher)', () => {
 				return [{ name: name ?? 'marketplace', success: true }];
 			};
 			registerTestAgentProvider(service, provider);
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			const listed = await managementService.listPluginMarketplaces(provider.id, session);
 			const added = await managementService.addPluginMarketplace(provider.id, session, 'owner/repository');
@@ -3917,6 +3921,18 @@ suite('AgentService (node dispatcher)', () => {
 					['refresh', session.toString(), 'marketplace'],
 				],
 			});
+
+			calls.length = 0;
+			await managementService.listPluginMarketplaces(provider.id);
+			await managementService.addPluginMarketplace(provider.id, undefined, 'owner/repository#feature/beta');
+			await managementService.browsePluginMarketplace(provider.id, undefined, 'marketplace');
+			assert.deepStrictEqual(calls, [
+				['list', undefined],
+				['add', undefined, 'owner/repository#feature/beta'],
+				['browse', undefined, 'marketplace'],
+			]);
+			provider.addPluginMarketplace = async () => { throw new Error('managed policy refused'); };
+			await assert.rejects(managementService.addPluginMarketplace(provider.id, undefined, 'owner/repository'), /managed policy refused/);
 		});
 
 		test('lists, opens and closes canvases through the owning provider', async () => {
@@ -3961,7 +3977,7 @@ suite('AgentService (node dispatcher)', () => {
 					}, [], creationTimeChatStorageResource);
 				}
 			};
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 			const session = AgentSession.uri('copilot', 'canvas-session');
 			const chat = URI.parse(buildDefaultChatUri(session.toString()));
 
@@ -4031,7 +4047,7 @@ suite('AgentService (node dispatcher)', () => {
 			});
 			let restoreCalls = 0;
 			service.restoreSession = async () => { restoreCalls++; };
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 			const coldSession = AgentSession.uri('copilot', 'canvas-cold-session');
 			const resource = URI.parse('ahp-canvas:/preview');
 
@@ -4075,7 +4091,7 @@ suite('AgentService (node dispatcher)', () => {
 				},
 			});
 			service.restoreSession = async () => { };
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			await assert.rejects(
 				managementService.listSessionCanvases(requestedSession, foreignChat),
@@ -4116,7 +4132,7 @@ suite('AgentService (node dispatcher)', () => {
 			});
 			let restoreCalls = 0;
 			service.restoreSession = async () => { restoreCalls++; };
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			await assert.rejects(
 				managementService.listSessionCanvases(session, chat),
@@ -8514,6 +8530,18 @@ suite('AgentService (node dispatcher)', () => {
 			await waitForCondition(agent.onDidSendMessage, () => agent.sendMessageCalls.length > 0, 'the rewritten message should reach the agent');
 		}
 
+		test('keeps skill resource identity when rewriting neighboring attachments', async () => {
+			const { svc, agent, session, attachmentsRoot, warnings } = await setup();
+			const skills: MessageAttachment[] = [
+				{ type: MessageAttachmentKind.Resource, uri: 'custom-skills:/review/SKILL.md', label: '/review', displayKind: 'skill' },
+				{ type: MessageAttachmentKind.Resource, uri: joinPath(attachmentsRoot, 'SKILL.md').toString(), label: '/other', displayKind: 'skill' },
+			];
+			await dispatchTurnAndWait(svc, agent, session, [...skills, {
+				type: MessageAttachmentKind.EmbeddedResource, label: 'Context', contentType: 'text/plain', data: encodeBase64(VSBuffer.fromString('context')),
+			}]);
+			assert.deepStrictEqual({ skills: agent.sendMessageCalls[0].attachments?.slice(0, 2), warnings }, { skills, warnings: [] });
+		});
+
 		test('snapshots EmbeddedResource attachments to disk and rewrites to a Resource URI under the session attachments folder', async () => {
 			const { svc, agent, session, attachmentsRoot } = await setup();
 			const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -8821,7 +8849,7 @@ suite('AgentService (node dispatcher)', () => {
 			const provider: IAgent = copilotAgent;
 			provider.getSessionStateFile = async session => URI.file(`/state/${AgentSession.id(session)}/events.jsonl`);
 			registerTestAgentProvider(service, provider);
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			assert.deepStrictEqual({
 				supported: (await managementService.getSessionStateFile(AgentSession.uri('copilot', 'session-1')))?.toString(),
@@ -10382,26 +10410,27 @@ suite('AgentService (node dispatcher)', () => {
 			return { svc, agent, warmed, onDidWarm: onDidWarm.event };
 		}
 
-		test('warms a trusted folder draft only in the treatment arm, and reports the trigger in both arms', async () => {
+		test('warms a trusted folder draft unless the setting is off, and reports the trigger in every case', async () => {
 			const results: Record<string, { warmed: boolean; triggers: readonly string[] }> = {};
-			for (const enabled of [true, false]) {
+			for (const [name, enabled] of [['enabled', true], ['disabled', false], ['unset', undefined]] as const) {
 				const telemetry = new TestExperimentTriggerTelemetryService();
 				const { svc, warmed, onDidWarm } = createPrewarmService(telemetry);
-				getConfigurationService(svc).updateRootConfig({ ...trustedRootConfig, [AgentHostPrewarmSessionsConfigKey]: enabled, [CopilotCliVSCodeAssignmentContextKey]: 'assignment-context' });
+				getConfigurationService(svc).updateRootConfig({ ...trustedRootConfig, ...(enabled === undefined ? {} : { [AgentHostPrewarmSessionsConfigKey]: enabled }), [CopilotCliVSCodeAssignmentContextKey]: 'assignment-context' });
 				const warm = Event.toPromise(onDidWarm);
 				const session = await svc.createSession({ legacyChatUris: true, provider: 'copilotcli', workingDirectories: [workingDirectory], activeClient });
-				if (enabled) {
+				if (enabled !== false) {
 					await warm;
 				} else {
 					await waitForCondition(telemetry.onDidTrigger, () => telemetry.triggers.length > 0, 'trigger reported');
 				}
 				warm.cancel();
-				results[enabled ? 'enabled' : 'disabled'] = { warmed: warmed.includes(getStateManager(svc).getDefaultChat(session.toString())!), triggers: telemetry.triggers };
+				results[name] = { warmed: warmed.includes(getStateManager(svc).getDefaultChat(session.toString())!), triggers: telemetry.triggers };
 			}
 
 			assert.deepStrictEqual(results, {
 				enabled: { warmed: true, triggers: [trigger] },
 				disabled: { warmed: false, triggers: [trigger] },
+				unset: { warmed: true, triggers: [trigger] },
 			});
 		});
 
@@ -24842,7 +24871,7 @@ suite('AgentService (node dispatcher)', () => {
 			service.claimDetachedWorktree = async handle => { calls.push(`claim:${handle}`); };
 			service.deleteDetachedWorktree = async handle => { calls.push(`delete:${handle}`); };
 			service.reconcileDetachedWorktrees = async (scope, activeHandles) => { calls.push(`reconcile:${scope}:${activeHandles.join(',')}`); };
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			const created = await managementService.createDetachedWorktree(session, 'prepare');
 			await managementService.setDetachedWorktreeArchived(created.handle, true);
@@ -24867,7 +24896,7 @@ suite('AgentService (node dispatcher)', () => {
 
 		test('forwards system wake and network reports to scheduled work readiness', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
 			const systemWake = disposables.add(new AgentHostSystemWakeService(new NullLogService()));
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), systemWake, new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), systemWake, new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 			const readiness = () => ({ fullyAwake: systemWake.isFullyAwake.get(), ready: systemWake.isReadyForScheduledWork.get() });
 
 			await managementService.setSystemFullyAwake(false);
@@ -25222,7 +25251,7 @@ suite('AgentService (node dispatcher)', () => {
 			};
 			nullSessionDataService.whenIdle = async () => { flushCount++; };
 			let ingressShutdownCount = 0;
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { ingressShutdownCount++; }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { ingressShutdownCount++; }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			const first = managementService.shutdown();
 			const second = managementService.shutdown();
@@ -25251,7 +25280,7 @@ suite('AgentService (node dispatcher)', () => {
 			};
 			service.shutdown = async () => { providerShutdownCount++; };
 			nullSessionDataService.whenIdle = async () => { flushCount++; };
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, () => stalled.p, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, () => stalled.p, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			void managementService.createSessionWithExtensions({});
 			await managementService.shutdown();
@@ -25265,6 +25294,74 @@ suite('AgentService (node dispatcher)', () => {
 			});
 		}));
 
+		test('flushes telemetry once providers stop, without waiting past its cap', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+			const steps: string[] = [];
+			const warnings: string[] = [];
+			const providerShutdown = new DeferredPromise<void>();
+			service.shutdown = () => {
+				steps.push('providers');
+				return providerShutdown.p;
+			};
+			nullSessionDataService.whenIdle = async () => { steps.push('sessionData'); };
+			const telemetryService = disposables.add(new AgentHostTelemetryService(NullTelemetryService, undefined, undefined, undefined, undefined, () => {
+				steps.push('telemetry');
+				return new Promise<void>(() => { });
+			}));
+			const logService = new class extends NullLogService {
+				override warn(message: string): void {
+					warnings.push(message);
+				}
+			}();
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, logService, disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), telemetryService);
+
+			let shutDown = false;
+			const shutdown = managementService.shutdown().then(() => { shutDown = true; });
+			await timeout(100);
+			const stepsWhileProvidersStop = [...steps];
+			providerShutdown.complete();
+			const providersStoppedAt = Date.now();
+			await timeout(AGENT_HOST_TELEMETRY_FLUSH_TIMEOUT_MS - 1);
+			const shutDownBeforeCap = shutDown;
+			await shutdown;
+
+			assert.deepStrictEqual({
+				stepsWhileProvidersStop,
+				steps,
+				shutDownBeforeCap,
+				waitedForTelemetryMs: Date.now() - providersStoppedAt,
+				warnings,
+			}, {
+				stepsWhileProvidersStop: ['providers'],
+				steps: ['providers', 'telemetry', 'sessionData'],
+				shutDownBeforeCap: false,
+				waitedForTelemetryMs: AGENT_HOST_TELEMETRY_FLUSH_TIMEOUT_MS,
+				warnings: [`Agent Host telemetry did not finish flushing within ${AGENT_HOST_TELEMETRY_FLUSH_TIMEOUT_MS}ms during shutdown.`],
+			});
+		}));
+
+		test('lets chat contributions report before providers shut down', async () => {
+			const steps: string[] = [];
+			class ShutdownStepContribution extends Disposable implements IAgentHostChatContribution {
+				static readonly id = 'test.shutdownStep';
+
+				constructor(_context: IAgentHostChatContributionContext) {
+					super();
+				}
+
+				onWillShutdown(): void {
+					steps.push('contribution');
+				}
+			}
+			const contributions = (service as unknown as { _chatContributions: IAgentHostChatContributions })._chatContributions;
+			disposables.add(contributions.registerContribution(ShutdownStepContribution));
+			copilotAgent.shutdown = async () => { steps.push('provider'); };
+			registerTestAgentProvider(service, copilotAgent);
+
+			await service.shutdown();
+
+			assert.deepStrictEqual(steps, ['contribution', 'provider']);
+		});
+
 		test('drains management mutations and rejects new ones during shutdown', async () => {
 			const session = URI.parse('copilot:/management-shutdown');
 			const createSession = new DeferredPromise<URI>();
@@ -25273,7 +25370,7 @@ suite('AgentService (node dispatcher)', () => {
 			service.createSession = () => createSession.p;
 			service.shutdown = async () => { providerShutdownCount++; };
 			nullSessionDataService.whenIdle = async () => { flushCount++; };
-			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService());
+			const managementService = new AgentHostManagementService(service, {} as IConnectionTrackerService, async () => { }, nullSessionDataService, new NullLogService(), disposables.add(new AgentHostSystemWakeService(new NullLogService())), new AgentHostMacAccessibilityTrustService(), NullTelemetryService);
 
 			const mutation = managementService.createSessionWithExtensions({});
 			const shutdown = managementService.shutdown();
@@ -26655,6 +26752,34 @@ suite('AgentService (node dispatcher)', () => {
 			assert.deepStrictEqual(
 				{ restored: !!getStateManager(localService).getSessionState(sessionStr), listed },
 				{ restored: true, listed: true },
+			);
+		});
+
+		test('an adopted legacy session keeps its own timestamps instead of the adoption time', async () => {
+			class AdoptAgent extends MockAgent {
+				constructor() { super('copilot'); }
+				override async listChatsToMigrate(): Promise<IAgentListedChat[]> {
+					return [];
+				}
+				async ensureChatAdopted(_chat: URI, _context: URI | IAgentChatContext): Promise<IAgentChatAdoptionResult> {
+					return { adopted: true, eligible: true, timestamps: { startTime: 1_000, modifiedTime: 2_000 } };
+				}
+				override async getChatMetadata(chat: URI): Promise<IAgentChatMetadata> {
+					return { chat, startTime: 1_000, modifiedTime: 2_000, summary: 'Adopted' };
+				}
+			}
+
+			const localService = disposables.add(createTestAgentService(new NullLogService(), fileService, createSessionDataService(new TestSessionDatabase()), { _serviceBrand: undefined } as IProductService, createNoopGitService()));
+			registerTestAgentProvider(localService, disposables.add(new AdoptAgent()));
+			const session = AgentSession.uri('copilot', 'adopted-keeps-timestamps');
+			await localService.restoreSession(session);
+
+			const registry = (localService as unknown as { _sessionRegistry: AgentSessionRegistry })._sessionRegistry;
+			const registered = await registry.get(session);
+			const summary = getStateManager(localService).getSessionSummary(session.toString());
+			assert.deepStrictEqual(
+				{ startTime: registered?.startTime, modifiedTime: registered?.modifiedTime, createdAt: summary?.createdAt, modifiedAt: summary?.modifiedAt },
+				{ startTime: 1_000, modifiedTime: 2_000, createdAt: new Date(1_000).toISOString(), modifiedAt: new Date(2_000).toISOString() },
 			);
 		});
 
@@ -35714,6 +35839,72 @@ suite('AgentService (node dispatcher)', () => {
 				stateAfterResolve: true,
 			});
 		});
+
+		for (const { target, archived } of [
+			{ target: 'default', archived: false },
+			{ target: 'peer', archived: false },
+			{ target: 'default', archived: true },
+			{ target: 'peer', archived: true },
+		]) {
+			test(`get_session_context repeatedly reads a cold ${archived ? 'archived' : 'unarchived'} ${target} chat without opening it`, async () => {
+				let failPeerHistoryRead = false;
+				class ContextAgent extends MockAgent {
+					serverToolHost: IAgentServerToolHost | undefined;
+					setServerToolHost(host: IAgentServerToolHost): void {
+						this.serverToolHost = host;
+					}
+					override async getSessionMessages(chat: URI): Promise<readonly Turn[]> {
+						const targetName = parseChatUri(chat)?.chatId === 'peer-context' ? 'peer' : 'default';
+						if (targetName === 'peer' && failPeerHistoryRead) {
+							throw new Error('Peer history unavailable');
+						}
+						return [{
+							id: 'completed-turn', state: TurnState.Complete,
+							message: { text: 'Original task', origin: { kind: MessageKind.User } },
+							responseParts: [{ kind: ResponsePartKind.Markdown, id: 'response', content: `Completed ${targetName} answer` }],
+							usage: undefined,
+						}];
+					}
+				}
+				const db = new TestSessionDatabase();
+				const localService = disposables.add(createTestAgentService(new NullLogService(), fileService, createSessionDataService(db), { _serviceBrand: undefined } as IProductService, createNoopGitService()));
+				const agent = disposables.add(new ContextAgent('copilot'));
+				registerTestAgentProvider(localService, agent);
+				const session = await localService.createSession({ legacyChatUris: true, provider: 'copilot' });
+				const caller = await localService.createSession({ legacyChatUris: true, provider: 'copilot' });
+				const peer = buildChatUri(session, 'peer-context');
+				await seedNormalizedPeers(localService, session, [{ chat: peer, order: 0, providerData: 'peer-context' }]);
+				const stateManager = getStateManager(localService);
+				if (archived) {
+					await localService.dispatchAction(session.toString(), { type: ActionType.SessionIsArchivedChanged, isArchived: true }, 'archive-client', 1);
+					await waitForCondition(stateManager.onDidRemoveSession, () => !stateManager.getSessionState(session.toString()), 'archived session was not released');
+				} else {
+					stateManager.deleteSession(session.toString());
+				}
+				const args = {
+					session: buildOpenSessionLinkUri(session.toString(), target === 'peer' ? 'peer-context' : undefined),
+				};
+				const read = async (input: typeof args & { responseTurnId?: string; responseOffset?: number }) =>
+					JSON.parse(await agent.serverToolHost!.executeTool(buildDefaultChatUri(caller), SessionServerToolName.GetSessionContext, input));
+				const first = await read(args);
+				const second = await read(args);
+				const page = await read({ ...args, responseTurnId: 'completed-turn', responseOffset: 10 });
+				const transcript = [
+					{ turn: 1, state: 'complete', user: 'Original task', assistant: `Completed ${target} answer` },
+				];
+				assert.deepStrictEqual({ first: first.transcript, second: second.transcript, response: page.assistant }, {
+					first: transcript, second: transcript, response: `${target} answer`,
+				});
+				if (archived) {
+					await waitForCondition(stateManager.onDidRemoveSession, () => !stateManager.getSessionState(session.toString()), 'transcript read kept the archived session resident');
+					if (target === 'peer') {
+						failPeerHistoryRead = true;
+						await assert.rejects(read(args), /Peer history unavailable/);
+						await waitForCondition(stateManager.onDidRemoveSession, () => !stateManager.getSessionState(session.toString()), 'failed transcript read kept the archived session resident');
+					}
+				}
+			});
+		}
 
 		test('get_session_context resolves a restored peer chat before reading its transcript', async () => {
 			let materializeCalls = 0;
@@ -45260,7 +45451,6 @@ suite('AgentService (node dispatcher)', () => {
 			const sourceDir = URI.file('/source/repo');
 			const worktreeDir = URI.file('/source/repo.worktrees/feature');
 			const gitStateCalls: Array<{ resource: string; baseBranch: string | undefined }> = [];
-			const secondGitStateCall = new DeferredPromise<void>();
 			const diffCalls: string[] = [];
 			const gitService = createNoopGitService();
 			gitService.getRepositoryRoot = async () => sourceDir;
@@ -45270,9 +45460,6 @@ suite('AgentService (node dispatcher)', () => {
 			gitService.getBranches = async () => [{ ref: 'refs/heads/main', name: 'main', kind: GitRefType.Head }];
 			gitService.getSessionGitState = async (resource, baseBranch) => {
 				gitStateCalls.push({ resource: resource.toString(), baseBranch });
-				if (gitStateCalls.length === 2) {
-					secondGitStateCall.complete();
-				}
 				return { branchName: 'feature', baseBranchName: 'main', uncommittedChanges: 1 };
 			};
 			gitService.computeSessionFileDiffs = async resource => {
@@ -45314,9 +45501,6 @@ suite('AgentService (node dispatcher)', () => {
 					&& uncommittedState.operations.some(operation => operation.id === 'discard-changes');
 			}, 'the uncommitted changeset should be ready with its operations');
 
-			// The base branch now comes from the store, so the second Git state refresh may land after the uncommitted state is ready.
-			await secondGitStateCall.p;
-
 			const sourceFile = URI.joinPath(sourceDir, 'dirty.ts').toString();
 			const uncommittedStateBeforeMaterialization = getStateManager(localService).getChangesetState(uncommittedChangeset);
 			const beforeMaterialization = {
@@ -45344,8 +45528,8 @@ suite('AgentService (node dispatcher)', () => {
 			}, {
 				beforeMaterialization: {
 					workingDirectory: sourceDir.toString(),
+					// The session and its default chat refresh the same folder together and share one read of it.
 					gitStateCalls: [
-						{ resource: sourceDir.toString(), baseBranch: undefined },
 						{ resource: sourceDir.toString(), baseBranch: undefined },
 					],
 					diffCalls: [sourceDir.toString()],
@@ -45777,13 +45961,9 @@ suite('AgentService (node dispatcher)', () => {
 
 		const workingDirectory = URI.file('/workspace');
 		const gitCalls: string[] = [];
-		const secondGitStateCall = new DeferredPromise<void>();
 		const gitService = createNoopGitService();
 		gitService.getSessionGitState = async resource => {
 			gitCalls.push(resource.toString());
-			if (gitCalls.length === 2) {
-				secondGitStateCall.complete();
-			}
 			return {
 				hasGitHubRemote: false,
 				branchName: 'main',
@@ -45808,7 +45988,6 @@ suite('AgentService (node dispatcher)', () => {
 		const defaultChat = buildDefaultChatUri(workspaceSession);
 		const uncommittedUri = buildUncommittedChangesetUri(defaultChat);
 		localService.addSubscriber(URI.parse(uncommittedUri), 'client-1');
-		await secondGitStateCall.p;
 		await waitForCondition(getStateManager(localService).onDidEmitEnvelope, () => getStateManager(localService).getChangesetState(uncommittedUri)?.operations?.some(operation => operation.id === 'commit') === true, 'the uncommitted changeset should offer a commit');
 
 		const workspaceState = getStateManager(localService).getSessionState(workspaceSession.toString());
@@ -45823,7 +46002,8 @@ suite('AgentService (node dispatcher)', () => {
 			lifecycle: SessionLifecycle.Creating,
 			sessionChangesets: [],
 			chatChangesets: ['uncommitted'],
-			gitCalls: [workingDirectory.toString(), workingDirectory.toString()],
+			// The session and its default chat refresh the same folder together and share one read of it.
+			gitCalls: [workingDirectory.toString()],
 			hasCommit: true,
 		});
 		localService.unsubscribe(URI.parse(uncommittedUri), 'client-1');

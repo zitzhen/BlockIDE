@@ -699,7 +699,7 @@ suite('ActionListWidget', () => {
 		});
 	}
 
-	test('preserves high contrast outlines during pointer navigation', () => {
+	test('uses dashed high contrast hover and solid keyboard focus outlines', () => {
 		const widget = createActionListWidget(disposables, {
 			items: [action('first'), action('second')],
 			listOptions: { showFilter: false },
@@ -707,11 +707,60 @@ suite('ActionListWidget', () => {
 		widget.domNode.classList.add('action-widget');
 		widget.domNode.style.setProperty('--vscode-menu-selectionBorder', '#f38518');
 		widget.domNode.style.setProperty('--vscode-contrastActiveBorder', '#f38518');
+		widget.domNode.style.setProperty('--vscode-strokeThickness', '1px');
 		widget.focus();
+		widget.focusNext();
+		const keyboardRow = widget.domNode.querySelector<HTMLElement>('.monaco-list-row.focused')!;
+		const readOutline = (row: HTMLElement) => {
+			const style = mainWindow.getComputedStyle(row);
+			return {
+				color: style.outlineColor,
+				offset: style.outlineOffset,
+				style: style.outlineStyle,
+				width: style.outlineWidth,
+			};
+		};
+		const keyboard = readOutline(keyboardRow);
 		const row = widget.domNode.querySelectorAll<HTMLElement>('.monaco-list-row')[1];
 		row.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, movementX: 1 }));
 
-		assert.strictEqual(mainWindow.getComputedStyle(row).outlineColor, 'rgb(243, 133, 24)');
+		assert.deepStrictEqual({
+			keyboard,
+			pointer: readOutline(row),
+		}, {
+			keyboard: { color: 'rgb(243, 133, 24)', offset: '-1px', style: 'solid', width: '1px' },
+			pointer: { color: 'rgb(243, 133, 24)', offset: '-1px', style: 'dashed', width: '1px' },
+		});
+	});
+
+	test('filtered high contrast lists stay solid until pointer navigation occurs', () => {
+		const widget = createActionListWidget(disposables, {
+			items: [action('first'), action('second')],
+			listOptions: { showFilter: true, focusFilterOnOpen: true, filterAsCombobox: true },
+		});
+		widget.domNode.classList.add('action-widget');
+		widget.domNode.style.setProperty('--vscode-menu-selectionBorder', '#f38518');
+		widget.domNode.style.setProperty('--vscode-contrastActiveBorder', '#f38518');
+		widget.domNode.style.setProperty('--vscode-strokeThickness', '1px');
+		const readOutline = () => {
+			const row = widget.domNode.querySelector<HTMLElement>('.monaco-list-row.focused')!;
+			const style = mainWindow.getComputedStyle(row);
+			return { style: style.outlineStyle, color: style.outlineColor };
+		};
+
+		widget.focus();
+		const initial = readOutline();
+		widget.domNode.querySelector<HTMLElement>('.monaco-list-row.focused')!
+			.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, movementX: 1 }));
+		const pointer = readOutline();
+		dispatchKeyDown(widget.filterInput!, { key: 'Shift', keyCode: 16 });
+		const keyboard = readOutline();
+
+		assert.deepStrictEqual({ initial, pointer, keyboard }, {
+			initial: { style: 'solid', color: 'rgb(243, 133, 24)' },
+			pointer: { style: 'dashed', color: 'rgb(243, 133, 24)' },
+			keyboard: { style: 'solid', color: 'rgb(243, 133, 24)' },
+		});
 	});
 
 	test('the first click selects its row without prior pointer movement', () => {
@@ -3749,6 +3798,9 @@ suite('ActionListWidget', () => {
 			}],
 			listOptions: { showFilter: false, submenuHoverDelay: 0 },
 		});
+		widget.domNode.classList.add('action-widget');
+		widget.domNode.style.setProperty('--vscode-contrastActiveBorder', '#f38518');
+		widget.domNode.style.setProperty('--vscode-strokeThickness', '1px');
 		const panel = widget.domNode.querySelector<HTMLElement>('.action-list-submenu-panel')!;
 		const row = widget.domNode.querySelector<HTMLElement>('.monaco-list-row')!;
 
@@ -3759,10 +3811,12 @@ suite('ActionListWidget', () => {
 			display: panel.style.display,
 			label: panel.querySelector('.title')?.textContent,
 			expanded: row.getAttribute('aria-expanded'),
+			outline: mainWindow.getComputedStyle(row).outlineStyle,
 		}, {
 			display: '',
 			label: 'Manual',
 			expanded: 'true',
+			outline: 'solid',
 		});
 	});
 
@@ -4602,6 +4656,39 @@ suite('ActionListWidget', () => {
 		widget.focus();
 
 		assert.strictEqual(widget.getFocusedElement()?.item?.id, 'match-first');
+	});
+
+	test('action item icons remain decorative when hidden and shown again', () => {
+		const item: IActionListItem<ITestActionItem> = {
+			...action('branch-item'),
+			group: { title: 'Branches', icon: Codicon.gitBranch },
+			submenuActions: [toAction({ id: 'action', label: 'Action', run: () => { } })],
+		};
+		const widget = createActionListWidget(disposables, {
+			items: [item],
+			listOptions: { showFilter: false },
+		});
+
+		const readIcons = () => {
+			const icon = widget.domNode.querySelector<HTMLElement>('.monaco-list-row > .codicon:not(.action-list-submenu-indicator)');
+			const submenuIndicator = widget.domNode.querySelector<HTMLElement>('.monaco-list-row .action-list-submenu-indicator');
+			return {
+				icon: icon?.getAttribute('aria-hidden'),
+				iconDisplay: icon?.style.display,
+				submenuIndicator: submenuIndicator?.getAttribute('aria-hidden'),
+			};
+		};
+
+		const visible = readIcons();
+		widget.updateItems([{ ...item, hideIcon: true }]);
+		const hidden = readIcons();
+		widget.updateItems([{ ...item, hideIcon: false }]);
+
+		assert.deepStrictEqual({ visible, hidden, shownAgain: readIcons() }, {
+			visible: { icon: 'true', iconDisplay: '', submenuIndicator: 'true' },
+			hidden: { icon: 'true', iconDisplay: 'none', submenuIndicator: 'true' },
+			shownAgain: { icon: 'true', iconDisplay: '', submenuIndicator: 'true' },
+		});
 	});
 
 });

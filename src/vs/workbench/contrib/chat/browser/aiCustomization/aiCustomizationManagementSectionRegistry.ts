@@ -9,6 +9,7 @@ import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.
 import { IObservable } from '../../../../../base/common/observable.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { IInstantiationService, ServicesAccessor } from '../../../../../platform/instantiation/common/instantiation.js';
+import { IEditorGroup } from '../../../../services/editor/common/editorGroupsService.js';
 import { AICustomizationManagementSection } from '../../common/aiCustomizationWorkspaceService.js';
 
 export interface IAICustomizationManagementSectionWidget extends IDisposable {
@@ -16,6 +17,8 @@ export interface IAICustomizationManagementSectionWidget extends IDisposable {
 	focus?(): void;
 	fireItemCount?(): void;
 	setSearchQuery?(query: string): void;
+	/** Shows the installed extension with the given identifier, such as its page. */
+	showExtension?(extensionId: string): void;
 	setVisible?(visible: boolean): void;
 	setCloseCustomizationEditor?(closeCustomizationEditor: () => Promise<boolean>): void;
 	getAccessibilityContent?(): string;
@@ -40,7 +43,11 @@ export interface IAICustomizationManagementSectionContribution {
 	 * accessible name. The editor reads it while it is open.
 	 */
 	readonly getBadge?: (accessor: ServicesAccessor) => IObservable<string | undefined>;
-	create(instantiationService: IInstantiationService, container: HTMLElement): IAICustomizationManagementSectionWidget;
+	/**
+	 * Creates the section's widget in `container`. `group` is the editor group of the editor that shows the section,
+	 * which editor panes that the section shows need.
+	 */
+	create(instantiationService: IInstantiationService, container: HTMLElement, group: IEditorGroup): IAICustomizationManagementSectionWidget;
 }
 
 class AICustomizationManagementSectionRegistry {

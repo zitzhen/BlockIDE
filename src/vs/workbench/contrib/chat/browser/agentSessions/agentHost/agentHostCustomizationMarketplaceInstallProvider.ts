@@ -30,6 +30,7 @@ import { IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from 
 import type { IMcpServerConfiguration } from '../../../../../../platform/mcp/common/mcpPlatformTypes.js';
 import { IRecordedCustomizationMarketplaceResource, ICustomizationMarketplaceInstallProvider } from '../../../common/customizationMarketplaceInstallService.js';
 import { ICustomizationMarketplaceInfo, ICustomizationMarketplaceManagementProvider, ICustomizationMarketplaceSearchProvider, ICustomizationMcpConfigurationProvider, ICustomizationPluginInstallProvider } from '../../../common/customizationHarnessService.js';
+import { customizationSearchMatchesAny } from '../../../common/aiCustomizationSearch.js';
 import { IAgentHostCustomizationService } from './agentHostCustomizationService.js';
 import { getGitHubMcpRegistryIcon } from '../../aiCustomization/githubMcpRegistryIcons.js';
 import { ContributionEnablementState } from '../../../common/enablement.js';
@@ -245,11 +246,16 @@ export class AgentHostCustomizationMarketplaceInstallProvider extends Disposable
 		return this.agentHostService.listPluginMarketplaces(this.providerId, this.getBackendSession(sessionResource), this.agentHostCustomizationService.getBackendChatResource?.(sessionResource));
 	}
 
-	async add(sessionResource: URI, source: string) {
+	async add(sessionResource: URI | undefined, source: string) {
 		if (!this.agentHostService.addPluginMarketplace) {
 			throw new Error(localize('agentHost.marketplaceManagement.addUnavailable', "The selected agent does not support adding marketplaces."));
 		}
-		const result = await this.agentHostService.addPluginMarketplace(this.providerId, this.getBackendSession(sessionResource), source, this.agentHostCustomizationService.getBackendChatResource?.(sessionResource));
+		const result = await this.agentHostService.addPluginMarketplace(
+			this.providerId,
+			sessionResource ? this.getBackendSession(sessionResource) : undefined,
+			source,
+			sessionResource ? this.agentHostCustomizationService.getBackendChatResource?.(sessionResource) : undefined,
+		);
 		this.fireMarketplacesChanged();
 		return result;
 	}
@@ -264,9 +270,9 @@ export class AgentHostCustomizationMarketplaceInstallProvider extends Disposable
 		}
 		const plugins = await this.agentHostService.browsePluginMarketplace(this.providerId, this.getBackendSession(sessionResource), marketplace.name, this.agentHostCustomizationService.getBackendChatResource?.(sessionResource));
 		this.throwIfCancelled(token);
-		const query = options.query?.trim().toLowerCase();
+		const query = options.query?.trim() ?? '';
 		const matching = query
-			? plugins.filter(plugin => plugin.name.toLowerCase().includes(query) || plugin.description?.toLowerCase().includes(query))
+			? plugins.filter(plugin => customizationSearchMatchesAny(query, [plugin.name, plugin.description]))
 			: plugins;
 		const offset = Number(options.cursor ?? 0);
 		const start = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;

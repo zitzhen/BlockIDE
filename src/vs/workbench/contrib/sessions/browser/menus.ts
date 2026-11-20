@@ -18,6 +18,8 @@ export function getNewSessionRepositoryConfigGroup(order: number, actionId: stri
  * Menu IDs for the Agent Sessions workbench layout.
  */
 export const Menus = {
+	MobileSessionsDrawerHeader: new MenuId('SessionsMobileSessionsDrawerHeader'),
+	NewSessionPlace: new MenuId('SessionsNewSessionPlace'),
 	BlockedSessionsHeader: new MenuId('SessionsBlockedSessionsHeader'),
 	BlockedSessionsItem: new MenuId('SessionsBlockedSessionsItem'),
 	SidebarSessionsHeader: new MenuId('SessionsSidebarSessionsHeader'),
@@ -31,6 +33,7 @@ export const Menus = {
 	SessionsViewHarness: new MenuId('SessionsViewHarness'),
 	SessionsViewExternalFilter: new MenuId('SessionsViewExternalFilter'),
 	SidebarCustomizations: new MenuId('SessionsSidebarCustomizations'),
+	SidebarCustomizationsEntryPoint: new MenuId('SessionsSidebarCustomizationsEntryPoint'),
 	SidebarAgentHost: new MenuId('SessionsSidebarAgentHost'),
 	AgentFeedbackEditorContent: new MenuId('AgentFeedbackEditorContent'),
 	/** Context menu of a pinned canvas row in the sidebar. */
@@ -51,6 +54,7 @@ export const Menus = {
 	NewSessionControl: new MenuId('NewSessions.SessionControlMenu'),
 	NewSessionRepositoryConfig: new MenuId('NewSessions.RepositoryConfigMenu'),
 	NewSessionWelcome: new MenuId('NewSessions.WelcomeMenu'),
+	NewSessionGlobalToolbar: new MenuId('NewSessions.GlobalToolbar'),
 	NewSessionWelcomeContext: new MenuId('NewSessions.WelcomeContextMenu'),
 	SessionWorkspaceManage: new MenuId('Sessions.SessionWorkspaceManage'),
 	SessionBarToolbar: new MenuId('SessionsSessionBarToolbar'),

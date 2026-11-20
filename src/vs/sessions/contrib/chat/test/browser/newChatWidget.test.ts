@@ -11,7 +11,7 @@ import { getBaseLayerHoverDelegate } from '../../../../../base/browser/ui/hover/
 import { getDefaultHoverDelegate } from '../../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { DeferredPromise, raceCancellationError, timeout } from '../../../../../base/common/async.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../../base/common/cancellation.js';
-import { CancellationError } from '../../../../../base/common/errors.js';
+import { CancellationError, errorHandler } from '../../../../../base/common/errors.js';
 import { createErrorWithActions, isErrorWithActions } from '../../../../../base/common/errorMessage.js';
 import { toAction } from '../../../../../base/common/actions.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
@@ -36,6 +36,7 @@ import { WelcomeName } from '../../../../../workbench/contrib/sessions/browser/c
 import { IStorageService, InMemoryStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
+import { INotificationService, Severity } from '../../../../../platform/notification/common/notification.js';
 import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';
 import { TestExperimentTriggerTelemetryService } from '../../../../../platform/telemetry/test/common/experimentTriggerTestUtils.js';
 import { COLLAPSED_SESSION_OPTIONS_SHOW_ICONS_SETTING, COMPARE_AGENTS_OPEN_IN_GRID_SETTING, ENVIRONMENT_PICKER_SETTING, NEW_SESSION_COMPOSER_OPTIONS_EXPANDED_SETTING, WORKSPACE_OPT_OUT_SETTING } from '../../../../../workbench/contrib/sessions/common/chatConstants.js';
@@ -67,6 +68,9 @@ import { RemoteAgentHostConnectionStatus } from '../../../../../platform/agentHo
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
+import { IViewsService } from '../../../../../workbench/services/views/common/viewsService.js';
+import { SessionsView } from '../../../../../workbench/contrib/sessions/browser/views/sessionsView.js';
+import { SessionsGrouping } from '../../../../../workbench/contrib/sessions/browser/views/sessionsList.js';
 import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
 import { NullHoverService } from '../../../../../platform/hover/test/browser/nullHoverService.js';
 import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
@@ -315,13 +319,14 @@ interface ISessionOptionsPersistenceHarness {
 
 interface ISendHarness {
 	readonly configurationService?: IConfigurationService;
+	readonly viewsService?: Pick<IViewsService, 'getViewWithId'>;
 	readonly _backgroundSend?: boolean;
 	readonly _draftHost?: INewSessionDraftHost;
 	readonly _backgroundSendStatus?: ISettableObservable<string | undefined>;
 	_lastBackgroundSentSessionResource?: URI;
 	_lastBackgroundSendOptions?: ISendRequestOptions;
 	readonly _newChatInput?: Pick<SharedChatInputComposer, 'hasInput'>;
-	readonly notificationService: { error(message: string | Error): void; info?(message: string): void };
+	readonly notificationService: { error(message: string | Error): void; info?(message: string): void; prompt?: INotificationService['prompt'] };
 	readonly _pendingBackgroundSends: { set(key: object, value: IDisposable): void; deleteAndDispose(key: object): void };
 	readonly recentWorkspacesService: { restoreDismissedWorkspace(folderUri: URI): void };
 	readonly newSessionComposerService: { notifyWillSendRequest(options: ISendRequestOptions, selection: IWorkspaceSelectionSnapshot | undefined): void };
@@ -357,7 +362,7 @@ interface ISendHarness {
 		} | undefined;
 	};
 	readonly sessionComparisonService?: { startComparison(options: IStartSessionComparisonOptions): Promise<{ readonly id: string; readonly participants: readonly { readonly role: SessionComparisonParticipantRole; readonly sessionResource?: URI }[] }> };
-	readonly sessionsService?: { unsetNewSession(): void; openSession(resource: URI, options: { readonly source: 'chat' }): Promise<void> };
+	readonly sessionsService?: { unsetNewSession(): void; openSession(resource: URI, options: IOpenSessionOptions): Promise<void> };
 	readonly commandService?: { executeCommand(commandId: string, ...args: unknown[]): Promise<unknown> };
 	readonly logService: { error(message: string, ...args: unknown[]): void };
 	_getComparisonBranch?(session: ISession): string | undefined;
@@ -527,7 +532,7 @@ const getNoWorkspaceOption = Reflect.get(NewChatWidget.prototype, '_getNoWorkspa
 const getWorkspaceRoots = Reflect.get(NewChatWidget.prototype, '_getWorkspaceRoots') as (this: IWorkspaceRootsHarness, session: ISession) => readonly URI[];
 const canSendRequestToWorkspace = Reflect.get(NewChatWidget.prototype, '_canSendRequestToWorkspace') as (this: ICanSendRequestToWorkspaceHarness, session: ISession, environment: ISessionCreationEnvironment, reader: IReader) => boolean;
 const restoreNoWorkspaceDraft = Reflect.get(NewChatWidget.prototype, '_restoreNoWorkspaceDraft') as (this: IRestoreNoWorkspaceDraftHarness) => Promise<void>;
-const handleWorkspaceSelection = Reflect.get(NewChatWidget.prototype, '_handleWorkspaceSelection') as (this: IHandleWorkspaceSelectionHarness, folderUri: URI | undefined) => Promise<void>;
+const handleWorkspaceSelection = Reflect.get(NewChatWidget.prototype, '_handleWorkspaceSelection') as (this: IHandleWorkspaceSelectionHarness, folderUri: URI | undefined, notByUser?: boolean) => Promise<void>;
 const onWorkspaceSelected = Reflect.get(NewChatWidget.prototype, '_onWorkspaceSelected') as (this: IClearWorkspaceHarness, folderUri: URI | undefined) => Promise<void>;
 const getWorkspaceOptOutTarget = Reflect.get(NewChatWidget.prototype, '_getWorkspaceOptOutTarget') as (
 	this: { readonly sessionsManagementService: Pick<ISessionsManagementService, 'isQuickChatTargetAvailable' | 'getQuickChatSessionTypes'> },
@@ -2320,16 +2325,19 @@ suite('NewChatWidget', () => {
 		await option?.submenuActions?.[1].run();
 
 		assert.deepStrictEqual({
+			ids: option?.submenuActions?.map(action => action.id),
 			labels: option?.submenuActions?.map(action => action.label),
 			icons: option?.submenuActions?.map(action => (action as { readonly icon?: { readonly id: string } }).icon?.id),
 			selections,
 		}, isWeb
 			? {
+				ids: undefined,
 				labels: undefined,
 				icons: undefined,
 				selections: [],
 			}
 			: {
+				ids: ['newSessionWorkspacePicker.quickChat', 'newSessionWorkspacePicker.quickChat'],
 				labels: ['This Computer', 'Test Remote'],
 				icons: [Codicon.vm.id, Codicon.remote.id],
 				selections: [{ providerId: 'agenthost-remote-test' }],
@@ -4030,22 +4038,39 @@ suite('NewChatWidget', () => {
 		});
 	});
 
-	for (const [backgroundSend, inboxEnabled] of [[false, false], [false, true], [true, false]]) {
-		test(`confirms opted-in background sends and reseeds the workspace (always background: ${backgroundSend}, Inbox enabled: ${inboxEnabled})`, async () => {
+	for (const [backgroundSend, inboxSelected, openFails] of [[false, false, false], [false, true, false], [true, false, false], [false, true, true]]) {
+		test(`notifies background sends and reseeds the workspace, preserving hosted status (always background: ${backgroundSend}, Inbox selected: ${inboxSelected}, open fails: ${openFails})`, async () => {
 			const onDidSendRequest = disposables.add(new Emitter<ISendRequestSentEvent>());
 			const pendingSends = disposables.add(new DisposableMap<object, IDisposable>());
 			const folderUri = URI.file('/dismissed');
 			const restored: URI[] = [];
+			const notifications: Parameters<INotificationService['prompt']>[] = [];
+			const opened: { resource: URI; options: IOpenSessionOptions }[] = [];
+			const openError = new Error('Session no longer available');
+			const errors: Error[] = [];
 			const session = upcastPartial<ISession>({ sessionId: 'draft' });
 			const sentSession = upcastPartial<ISession>({ resource: URI.parse('test-session:/started') });
 			let sentOptions: ISendRequestOptions | undefined;
 			const picker = { selectedFolderUri: folderUri, validateSelectedWorkspace: async () => true, clearAttachedContext: () => { }, showPicker: () => { } };
 			const harness: ISendHarness = {
-				configurationService: new TestConfigurationService({ 'sessions.list.inboxEnabled': inboxEnabled }),
+				configurationService: new TestConfigurationService({ 'sessions.list.inboxEnabled': !inboxSelected }),
+				viewsService: { getViewWithId: <T>() => upcastPartial<SessionsView>({ grouping: inboxSelected ? SessionsGrouping.Inbox : SessionsGrouping.Workspace }) as T },
 				_backgroundSend: backgroundSend,
 				_backgroundSendStatus: observableValue<string | undefined>('sendStatus', undefined),
 				_newChatInput: { hasInput: false },
-				notificationService: { error: () => assert.fail('Unexpected error') },
+				notificationService: {
+					error: () => assert.fail('Unexpected error'),
+					prompt: (...args) => { notifications.push(args); return upcastPartial<ReturnType<INotificationService['prompt']>>({}); },
+				},
+				sessionsService: {
+					unsetNewSession: () => assert.fail('Unexpected navigation'),
+					openSession: async (resource, options) => {
+						opened.push({ resource, options });
+						if (openFails) {
+							throw openError;
+						}
+					},
+				},
 				_pendingBackgroundSends: pendingSends,
 				recentWorkspacesService: { restoreDismissedWorkspace: uri => restored.push(uri) },
 				_session: constObservable(session),
@@ -4064,16 +4089,28 @@ suite('NewChatWidget', () => {
 				_createNewSession: async () => { picker.selectedFolderUri = URI.file('/different-workspace'); },
 			};
 			await send.call(harness, 'hello', undefined, backgroundSend ? undefined : true);
-			const beforeSuccess = { restored: [...restored], status: harness._backgroundSendStatus?.get() };
+			const beforeSuccess = { restored: [...restored], status: harness._backgroundSendStatus?.get(), notifications: notifications.length };
 			onDidSendRequest.fire(upcastPartial<ISendRequestSentEvent>({ options: { query: 'unrelated' } }));
-			const afterUnrelatedSend = { restored: [...restored], status: harness._backgroundSendStatus?.get() };
+			const afterUnrelatedSend = { restored: [...restored], status: harness._backgroundSendStatus?.get(), notifications: notifications.length };
 			assert.ok(sentOptions);
 			onDidSendRequest.fire(upcastPartial<ISendRequestSentEvent>({ options: sentOptions, session: sentSession }));
-			assert.deepStrictEqual({ beforeSuccess, afterUnrelatedSend, restored, pending: pendingSends.size, background: sentOptions.background, status: harness._backgroundSendStatus?.get(), resource: harness._lastBackgroundSentSessionResource }, {
-				beforeSuccess: { restored: [], status: undefined }, afterUnrelatedSend: { restored: [], status: undefined },
+			const openedBeforeAction = [...opened];
+			const previousHandler = errorHandler.getUnexpectedErrorHandler();
+			errorHandler.setUnexpectedErrorHandler(error => errors.push(error));
+			try {
+				await notifications[0]?.[2][0].run();
+			} finally {
+				errorHandler.setUnexpectedErrorHandler(previousHandler);
+			}
+			assert.deepStrictEqual({ beforeSuccess, afterUnrelatedSend, restored, pending: pendingSends.size, background: sentOptions.background, status: harness._backgroundSendStatus?.get(), resource: harness._lastBackgroundSentSessionResource, notifications: notifications.map(([severity, message, choices]) => ({ severity, message, choices: choices.map(choice => choice.label) })), openedBeforeAction, opened, errors }, {
+				beforeSuccess: { restored: [], status: undefined, notifications: 0 }, afterUnrelatedSend: { restored: [], status: undefined, notifications: 0 },
 				restored: [folderUri], pending: 0, background: true,
-				status: backgroundSend || inboxEnabled ? 'Message sent' : undefined,
-				resource: backgroundSend || inboxEnabled ? sentSession.resource : undefined,
+				status: backgroundSend ? 'Message sent' : undefined,
+				resource: backgroundSend ? sentSession.resource : undefined,
+				notifications: backgroundSend ? [] : [{ severity: Severity.Info, message: 'Message sent', choices: ['Open Session'] }],
+				openedBeforeAction: [],
+				opened: backgroundSend ? [] : [{ resource: sentSession.resource, options: { source: 'link', forceMainChat: true } }],
+				errors: openFails ? [openError] : [],
 			});
 		});
 	}
@@ -5506,6 +5543,32 @@ suite('NewChatWidget', () => {
 		});
 	}));
 
+	test('a workspace selection the user did not make leaves focus in the input being typed in', async () => {
+		const input = append(mainWindow.document.body, $('input'));
+		const button = append(mainWindow.document.body, $('button'));
+		disposables.add(toDisposable(() => { input.remove(); button.remove(); }));
+		const run = async (notByUser: boolean, focused: HTMLElement) => {
+			let focusCalls = 0;
+			focused.focus();
+			await handleWorkspaceSelection.call(upcastPartial<IHandleWorkspaceSelectionHarness>({
+				_environment: constObservable(undefined),
+				_workspaceOptOutEnabled: constObservable(false),
+				_newChatInput: { focus: () => focusCalls++ },
+				_isCurrentWorkspaceSelection: () => true,
+			}), URI.file('/handed-off'), notByUser);
+			return focusCalls;
+		};
+		assert.deepStrictEqual({
+			byUserWhileTyping: await run(false, input),
+			notByUserWhileTyping: await run(true, input),
+			notByUserWhileNotTyping: await run(true, button),
+		}, {
+			byUserWhileTyping: 1,
+			notByUserWhileTyping: 0,
+			notByUserWhileNotTyping: 1,
+		});
+	});
+
 	for (const origin of [
 		WorkspaceSelectionOrigin.None, WorkspaceSelectionOrigin.CheckedWorkspace, WorkspaceSelectionOrigin.AgentsRecent,
 		WorkspaceSelectionOrigin.VSCodeRecent, WorkspaceSelectionOrigin.VSCodeWorkspace, WorkspaceSelectionOrigin.ExistingSessions, WorkspaceSelectionOrigin.WindowContext,
@@ -5693,6 +5756,87 @@ suite('NewChatWidget', () => {
 			'claude-model',
 			'codex-model',
 			'fusion',
+		]);
+	});
+
+	test('keeps comparison mode while the selected workspace is waiting for its replacement draft', () => {
+		const second = URI.file('/second');
+		const isRepository = observableValue('isRepository', false);
+		const createWorkspace = (root: URI) => upcastPartial<ISessionWorkspace>({
+			folders: [{ root, workingDirectory: root, name: 'Workspace', description: '', gitRepository: upcastPartial<ISessionGitRepository>({ isRepository }) }],
+		});
+		const workspace = observableValue<ISessionWorkspace | undefined>('workspace', undefined);
+		const loading = observableValue('loading', false);
+		const resolving = observableValue('resolving', false);
+		const isolationOptions = observableValue('isolationOptions', ['folder', 'worktree']);
+		const selectedFolder = observableValue<URI | undefined>('selectedFolder', undefined);
+		const session = observableValue<ISession | undefined>('session', upcastPartial<ISession>({
+			workspace, loading,
+			mainChat: constObservable(upcastPartial<IChat>({ resource: URI.parse('agent-host-copilot:/draft') })),
+		}));
+		const harness = {
+			_session: session,
+			_workspacePicker: { get selectedFolderUri() { return selectedFolder.get(); } },
+			sessionsProvidersService: {
+				getProvider: () => ({
+					id: LOCAL_AGENT_HOST_PROVIDER_ID,
+					getSessionConfig: () => ({ schema: { type: 'object', properties: { isolation: { type: 'string', title: 'Isolation', enum: isolationOptions.get() } } }, values: { isolation: 'folder' } }),
+				}),
+			},
+		};
+		const isPending = Reflect.get(NewChatWidget.prototype, '_isComparisonPending') as (this: typeof harness, reader: IReader, resolving: IObservable<boolean>) => boolean;
+		const pending = derived(reader => {
+			selectedFolder.read(reader);
+			isolationOptions.read(reader);
+			return isPending.call(harness, reader, resolving);
+		});
+		const available = observableValue('available', true);
+		const selection = disposables.add(new SessionComparisonModelSelection(available, undefined, undefined, undefined, pending, disposables.add(new InMemoryStorageService()), disposables.add(new TestInstantiationService())));
+		selection.start();
+		selection.select('one');
+		selection.select('two');
+		selection.next();
+		selection.select('judge');
+		selection.next();
+		selection.select('synthesizer');
+		selection.finish();
+		const snapshots: { pending: boolean; enabled: boolean; judge: string | undefined; synthesizer: string | undefined }[] = [];
+		disposables.add(autorun(reader => snapshots.push({
+			pending: pending.read(reader),
+			enabled: selection.enabled.read(reader),
+			judge: selection.judgeModelId.read(reader),
+			synthesizer: selection.synthesizerModelId.read(reader),
+		})));
+		transaction(tx => {
+			selectedFolder.set(second, tx);
+			available.set(false, tx);
+		});
+		transaction(tx => {
+			workspace.set(createWorkspace(second), tx);
+			resolving.set(true, tx);
+		});
+		resolving.set(false, undefined);
+		transaction(tx => {
+			isRepository.set(true, tx);
+			available.set(true, tx);
+		});
+		transaction(tx => {
+			isolationOptions.set(['folder'], tx);
+			isRepository.set(false, tx);
+			available.set(false, tx);
+		});
+		selectedFolder.set(undefined, undefined);
+		transaction(tx => {
+			workspace.set(undefined, tx);
+			available.set(true, tx);
+		});
+		assert.deepStrictEqual(snapshots, [
+			{ pending: false, enabled: true, judge: 'judge', synthesizer: 'synthesizer' },
+			{ pending: true, enabled: true, judge: 'judge', synthesizer: 'synthesizer' },
+			{ pending: false, enabled: true, judge: 'judge', synthesizer: 'synthesizer' },
+			{ pending: false, enabled: false, judge: 'judge', synthesizer: 'synthesizer' },
+			{ pending: true, enabled: true, judge: 'judge', synthesizer: 'synthesizer' },
+			{ pending: false, enabled: true, judge: 'judge', synthesizer: 'synthesizer' },
 		]);
 	});
 

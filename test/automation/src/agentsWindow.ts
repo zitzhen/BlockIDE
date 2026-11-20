@@ -363,21 +363,38 @@ export class AgentsWindow {
 		throw new Error(`Timed out selecting Dev Container. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 	}
 
+	/**
+	 * Switches the new-session environment from Cloud to This Computer.
+	 *
+	 * The workspace handoff of a window opened with a folder can switch the
+	 * environment to This Computer on its own after startup. That re-renders the
+	 * composer and closes an open Environment picker, so each attempt is bounded
+	 * and the loop ends as soon as the picker no longer shows Cloud.
+	 */
 	private async selectLocalEnvironment(): Promise<void> {
 		const page = this.code.driver.currentPage;
-		const cloudEnvironment = page.locator(ENVIRONMENT_PICKER).filter({ hasText: /^Cloud$/ });
+		const environmentPicker = page.locator(ENVIRONMENT_PICKER);
+		const cloudEnvironment = environmentPicker.filter({ hasText: /^Cloud$/ });
+		const localEnvironment = page.locator(WORKSPACE_PICKER_ROW).filter({ has: page.getByText('This Computer', { exact: true }) });
 		const deadline = Date.now() + 60_000;
+		let lastError: unknown;
 		while (await cloudEnvironment.isVisible()) {
-			await cloudEnvironment.click();
-			const localEnvironment = page.locator(WORKSPACE_PICKER_ROW).filter({ has: page.getByText('This Computer', { exact: true }) });
-			if (await localEnvironment.isVisible()) {
-				await localEnvironment.click();
-				await page.locator(ENVIRONMENT_PICKER).filter({ hasText: 'This Computer' }).waitFor();
-				return;
-			}
-			await page.keyboard.press('Escape');
 			if (Date.now() >= deadline) {
-				throw new Error('Timed out waiting for This Computer in the Environment picker');
+				throw new Error(`Timed out selecting This Computer in the Environment picker. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+			}
+			try {
+				await cloudEnvironment.click({ timeout: 5_000 });
+				if (await localEnvironment.isVisible()) {
+					await localEnvironment.click({ timeout: 5_000 });
+					await environmentPicker.filter({ hasText: 'This Computer' }).waitFor({ timeout: 15_000 });
+					return;
+				}
+				lastError = new Error('This Computer is not listed in the Environment picker');
+			} catch (error) {
+				lastError = error;
+			}
+			if (await environmentPicker.getAttribute('aria-expanded', { timeout: 5_000 }).catch(() => undefined) === 'true') {
+				await page.keyboard.press('Escape');
 			}
 			await new Promise(resolve => setTimeout(resolve, 500));
 		}
@@ -653,7 +670,30 @@ export class AgentsWindow {
 			}
 		}
 
-		await this.code.waitAndClick(ACTIVE_SESSION_SEND_BUTTON_ENABLED);
+		await this.clickActiveSessionSendButton();
+	}
+
+	/**
+	 * Clicks the enabled send button of the active session. A modal dialog, such as a proxy login dialog opened by a
+	 * concurrent request, swallows the click, so this waits for it to close first, and clicks again if one opened in the
+	 * meantime and the prompt was not sent, which disables the send button or replaces it with the stop button.
+	 */
+	private async clickActiveSessionSendButton(): Promise<void> {
+		const page = this.code.driver.currentPage;
+		const modalDialog = page.locator('.monaco-dialog-modal-block').first();
+		const sendButton = page.locator(ACTIVE_SESSION_SEND_BUTTON_ENABLED).first();
+		for (let attempt = 1; ; attempt++) {
+			await modalDialog.waitFor({ state: 'hidden', timeout: 2 * 60_000 });
+			await this.code.waitAndClick(ACTIVE_SESSION_SEND_BUTTON_ENABLED);
+			if (attempt === 3 || !await modalDialog.isVisible().catch(() => false)) {
+				return;
+			}
+			await modalDialog.waitFor({ state: 'hidden', timeout: 2 * 60_000 });
+			if (await sendButton.waitFor({ state: 'detached', timeout: 5_000 }).then(() => true, () => false)) {
+				return;
+			}
+			this.code.logger.log('[agentsWindow] A modal dialog swallowed the click on the send button, clicking it again');
+		}
 	}
 
 	private async _activeSessionContainsResponse(label: string): Promise<boolean> {

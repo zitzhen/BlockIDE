@@ -12,7 +12,8 @@ import { getErrorMessage, isCancellationError } from '../../../../../../base/com
 import { StringSHA1 } from '../../../../../../base/common/hash.js';
 import { Disposable, DisposableResourceMap, DisposableStore, IDisposable, toDisposable } from '../../../../../../base/common/lifecycle.js';
 import { ResourceSet } from '../../../../../../base/common/map.js';
-import { AgentHostMcpServers, AgentHostMcpServersConfigKey } from '../../../../../../platform/agentHost/common/agentHostSchema.js';
+import { AgentHostMcpServers, AgentHostMcpServersConfigKey, IPermissionsValue } from '../../../../../../platform/agentHost/common/agentHostSchema.js';
+import { SessionConfigKey } from '../../../../../../platform/agentHost/common/sessionConfigKeys.js';
 import { affectsAgentHostProviderPreference, IAgentConnection, isLocalAgentHostProviderDisabledByPolicy } from '../../../../../../platform/agentHost/common/agentService.js';
 import { getAgentHostCustomizationUri } from '../../../common/agentHostSessionCustomizations.js';
 import { IAgentHostResourceUriMapper } from '../../../../../../platform/agentHost/common/agentHostUri.js';
@@ -101,6 +102,12 @@ export interface IAgentHostCustomizationService {
 	 */
 	getMcpServers(sessionResource: URI): readonly IAgentHostMcpServer[];
 
+	/** Returns host-wide permissions, or undefined when the host does not advertise writable permissions. */
+	getHostPermissions(sessionResource: URI): IPermissionsValue | undefined;
+
+	/** Updates host-wide permissions on the connection backing the session. */
+	setHostPermissions(sessionResource: URI, permissions: IPermissionsValue): void;
+
 	/**
 	 * Adds (or replaces) an agent-host-level MCP server in the root config of
 	 * the agent host backing `sessionResource`. The write is routed to the
@@ -168,6 +175,13 @@ export class NullAgentHostCustomizationService implements IAgentHostCustomizatio
 	getMcpServers(_sessionResource: URI): readonly IAgentHostMcpServer[] {
 		return [];
 	}
+	getHostPermissions(_sessionResource: URI): IPermissionsValue | undefined {
+		return undefined;
+	}
+	setHostPermissions(_sessionResource: URI, _permissions: IPermissionsValue): void {
+		// no-op
+	}
+
 	addMcpServer(_sessionResource: URI, _name: string, _config: IMcpServerConfiguration): void {
 		// no-op
 	}
@@ -488,6 +502,21 @@ export abstract class AbstractAgentHostCustomizationService extends Disposable i
 				this._mcpAutoAuthentication.delete(key);
 			}
 		}
+	}
+
+	getHostPermissions(sessionResource: URI): IPermissionsValue | undefined {
+		const rootConfig = this._resolveTarget(sessionResource)?.rootConfig;
+		const permissionsSchema = rootConfig?.schema.properties[SessionConfigKey.Permissions];
+		if (!rootConfig || !permissionsSchema || permissionsSchema.readOnly) {
+			return undefined;
+		}
+		// The host validates permissions when it reads them, so use the published value as is.
+		const value = rootConfig.values[SessionConfigKey.Permissions] as Partial<IPermissionsValue> | undefined;
+		return { ...value, allow: value?.allow ?? [], deny: value?.deny ?? [] };
+	}
+
+	setHostPermissions(sessionResource: URI, permissions: IPermissionsValue): void {
+		this._resolveTarget(sessionResource)?.setRootConfigValue(SessionConfigKey.Permissions, permissions);
 	}
 
 	addMcpServer(sessionResource: URI, name: string, config: IMcpServerConfiguration): void {

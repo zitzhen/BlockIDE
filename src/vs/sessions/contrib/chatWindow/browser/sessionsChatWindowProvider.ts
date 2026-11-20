@@ -7,10 +7,9 @@ import './media/chatWindow.css';
 import { raceTimeout, timeout } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableMap, DisposableStore, IDisposable, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
-import { autorun, constObservable, derived, IObservable, IReader, ISettableObservable, observableFromEvent, observableSignalFromEvent, observableValue, transaction, waitForState } from '../../../../base/common/observable.js';
+import { autorun, constObservable, derived, IObservable, IReader, ISettableObservable, observableFromEvent, observableSignal, observableValue, transaction, waitForState } from '../../../../base/common/observable.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { extUri, isEqual } from '../../../../base/common/resources.js';
-import { DeepPartial } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
@@ -18,9 +17,9 @@ import { IInstantiationService } from '../../../../platform/instantiation/common
 import { ServiceCollection } from '../../../../platform/instantiation/common/serviceCollection.js';
 import { observableConfigValue } from '../../../../platform/observable/common/platformObservableUtils.js';
 import { IEditorGroupView, IEditorGroupViewOptions } from '../../../../workbench/browser/parts/editor/editor.js';
-import { GroupModelChangeKind, IEditorPartOptions } from '../../../../workbench/common/editor.js';
+import { GroupModelChangeKind } from '../../../../workbench/common/editor.js';
 import { IChatService } from '../../../../workbench/contrib/chat/common/chatService/chatService.js';
-import { IChatWindow, IChatWindowChat, IChatWindowChrome, IChatWindowChromeElement, IChatWindowContent, IChatWindowEditors, IChatWindowLook, IChatWindowNewChatOptions, IChatWindowProvider, IChatWindowService } from '../../../../workbench/contrib/chatWindow/browser/chatWindow.js';
+import { getChatWindowMainPartOptions, IChatWindow, IChatWindowChat, IChatWindowChrome, IChatWindowChromeElement, IChatWindowContent, IChatWindowEditors, IChatWindowLook, IChatWindowNewChatOptions, IChatWindowProvider, IChatWindowService } from '../../../../workbench/contrib/chatWindow/browser/chatWindow.js';
 import { IChatEntitlementService } from '../../../../workbench/services/chat/common/chatEntitlementService.js';
 import { IEditorGroup, IEditorGroupsService } from '../../../../workbench/services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../../workbench/services/editor/common/editorService.js';
@@ -31,6 +30,7 @@ import { AgentsWindowMenus } from '../../../browser/agentsWindowMenus.js';
 import { EmptyEditorGroupAddTab } from '../../../../workbench/browser/parts/sessions/emptyEditorGroupAddTab.js';
 import { observeSessionActivityBarSize, registerSessionActivityBarExternalHost } from '../../../../workbench/browser/parts/sessions/sessionActivityBarHost.js';
 import { MenuActivityBar, MenuActivityBarSize } from '../../../../workbench/browser/parts/activitybar/menuActivityBar.js';
+import { AgentsPartCard } from '../../../../workbench/browser/parts/sessions/agentsPartCard.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { CustomViewVisibleContext } from '../../../common/agentsWindowContextKeys.js';
 import { AGENTS_FLOATING_PANEL_GAP } from '../../../../workbench/contrib/sessions/common/layoutConstants.js';
@@ -70,16 +70,7 @@ const RESTORE_SESSION_TIMEOUT = 30_000;
  * its left, and a {@link MenuActivityBar} at the size chosen for the Session Activity Bar, which fills the rest.
  */
 export function getChatWindowStripWidth(compact: boolean, size: MenuActivityBarSize): number {
-	return (compact ? 0 : AGENTS_FLOATING_PANEL_GAP) + MenuActivityBar.getWidth(compact, size);
-}
-
-/**
- * The options of the main part of a chat window: its tabs follow `workbench.editor.showTabs`, live, as the main window's
- * editor area does; `none` shows as `single`, so that the part keeps its title with its actions. Double-clicking a tab
- * does not maximize or expand a group: the window arranges its parts.
- */
-export function getChatWindowMainPartOptions(showTabs: string | undefined): DeepPartial<IEditorPartOptions> {
-	return { doubleClickTabToToggleEditorGroupSizes: 'off', ...(showTabs === 'none' ? { showTabs: 'single' } : undefined) };
+	return (compact ? 0 : AGENTS_FLOATING_PANEL_GAP - AgentsPartCard.BORDER_WIDTH) + MenuActivityBar.getWidth(compact, size);
 }
 
 /** The options of the groups of the main part of a chat window: those of the main window's editor area of the Agents window. */
@@ -168,11 +159,14 @@ class SessionsChatWindowChat extends Disposable implements IChatWindowChat, ISes
 	readonly isUnsentComposer: IObservable<boolean> = derived(this, reader => !!this._composer.read(reader));
 	/** The session the chat was last known in, so that its end is known while the session no longer lists it. */
 	private _knownSession: ISession | undefined;
+	/** Whether its known session was removed, such as deleted: not hidden as its provider goes away, which removes nothing. */
+	private _knownSessionRemoved = false;
 
 	private readonly _onWillDispose = this._register(new Emitter<void>());
 	readonly onWillDispose = this._onWillDispose.event;
 	/** Keeps the chat out of the main window's grid while the window shows it. */
 	private readonly _gridHold = this._register(new MutableDisposable());
+	private _heldSession: ISession | undefined;
 
 	/** The views of its editor, the last of which shows it; see {@link view}. */
 	private readonly _attachedViews: ChatEditorContent[] = [];
@@ -245,7 +239,19 @@ class SessionsChatWindowChat extends Disposable implements IChatWindowChat, ISes
 			this._heldChat.hold(chatResource, this._boundCheck());
 		}
 
-		const sessionsChanged = observableSignalFromEvent(this, _sessionsManagementService.onDidChangeSessions);
+		// Once it knows its session, only sessions added, removed or replaced can change where its chat is: what changes in its
+		// session it reads from that session. So the many changes of other sessions, such as while they stream, pass it by.
+		// A replacement, such as a pending session committed under the same ID, comes as a change of another object.
+		const sessionsChanged = observableSignal(this);
+		this._register(_sessionsManagementService.onDidChangeSessions(e => {
+			const known = this._knownSession;
+			if (known && e.removed.some(removed => isEqual(removed.resource, known.resource))) {
+				this._knownSessionRemoved = true;
+			}
+			if (!known || e.added.length || e.removed.length || e.changed.some(changed => changed !== known && changed.sessionId === known.sessionId)) {
+				sessionsChanged.trigger(undefined);
+			}
+		}));
 		this._register(autorun(reader => {
 			sessionsChanged.read(reader);
 			this._update(reader);
@@ -307,18 +313,24 @@ class SessionsChatWindowChat extends Disposable implements IChatWindowChat, ISes
 				owner.session.loading.read(reader);
 			}
 			this._knownSession = owner.session;
+			this._knownSessionRemoved = false;
 			if (isChatWindowChatGone(owner.session, chatResource, reader)) {
 				this._end();
 				return;
 			}
 			const shown = this._shown.get();
 			if (shown?.session !== owner.session || shown.chat !== owner.chat) {
-				const sessionChanged = shown?.session.sessionId !== owner.session.sessionId;
 				this._shown.set({ session: owner.session, chat: owner.chat }, undefined);
-				if (sessionChanged) {
-					this._gridHold.value = this._sessionsService.hideChatFromGrid(owner.session, owner.chat.resource);
-				}
 			}
+			if (this.window.read(reader) && this._heldSession?.sessionId !== owner.session.sessionId) {
+				this._heldSession = owner.session;
+				this._gridHold.value = this._sessionsService.hideChatFromGrid(owner.session, owner.chat.resource);
+			}
+			return;
+		}
+		if (this._knownSessionRemoved && !(this._knownSession && this._sessionsManagementService.getSession(this._knownSession.resource))) {
+			// Its session is gone, such as deleted: its chats with it, also while the session's last state still lists them
+			this._end();
 			return;
 		}
 		// Gone once the session it was in has loaded and no longer lists it, such as once it was deleted

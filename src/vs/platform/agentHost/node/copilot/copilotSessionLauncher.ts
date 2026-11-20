@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AttributedPermissionResult, ContextTier, CopilotClient, CopilotExpAssignmentResponse, CopilotSession, ElicitationContext, ElicitationResult, ExitPlanModeRequest, ExitPlanModeResult, ManagedSettingsPermissions, MCPServerConfig, MCPStdioServerConfig, ModelCapabilitiesOverride, NamedProviderConfig, PermissionHandler, PermissionRequest, PermissionRequestResult, ProviderModelConfig, ResumeSessionConfig, SessionConfig, SessionEvent, SessionHooks, Tool, Verbosity } from '@github/copilot-sdk';
+import type { AttributedPermissionResult, ContextTier, CopilotClient, CopilotExpAssignmentResponse, CopilotSession, ElicitationContext, ElicitationHandlerResult, ExitPlanModeRequest, ExitPlanModeResult, ManagedSettingsPermissions, MCPServerConfig, MCPStdioServerConfig, ModelCapabilitiesOverride, NamedProviderConfig, PermissionHandler, PermissionMode, PermissionRequest, PermissionRequestResult, ProviderModelConfig, ResumeSessionConfig, SessionConfig, SessionEvent, SessionHooks, Tool, Verbosity } from '@github/copilot-sdk';
 import { homedir } from 'os';
 import { coalesce } from '../../../../base/common/arrays.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
@@ -361,6 +361,12 @@ export function toSdkToolFilterPatterns(patterns: readonly string[] | undefined)
 export interface ICopilotSessionRuntime {
 	readonly cancellationToken?: CancellationToken;
 	readonly setApprovalPolicy?: (resolved: Parameters<typeof getCopilotApprovalPolicy>[0], bridged: ManagedSettingsPermissions) => void;
+	/**
+	 * The permission mode the session opens in, resolved under the approval policy {@link setApprovalPolicy}
+	 * just received. `undefined` opens without one: a new session in the runtime's default mode, a resumed one in
+	 * its restored mode. The runtime may refuse the mode, so the opened session's result decides what was applied.
+	 */
+	readonly resolveInitialPermissionMode?: () => PermissionMode | undefined;
 	readonly onSessionEvent?: (event: SessionEvent) => void;
 	/** Chat channel that owns this session's turns, used to attribute terminal claims. */
 	readonly chatUri: URI;
@@ -373,7 +379,7 @@ export interface ICopilotSessionRuntime {
 	handlePermissionRequest(request: PermissionRequest, invocation?: Parameters<PermissionHandler>[1]): Promise<PermissionRequestResult | AttributedPermissionResult>;
 	handleExitPlanModeRequest(request: ExitPlanModeRequest, invocation: { sessionId: string }): Promise<ExitPlanModeResult>;
 	handleUserInputRequest(request: UserInputRequest, invocation: UserInputInvocation): Promise<UserInputResponse>;
-	handleElicitationRequest(context: ElicitationContext): Promise<ElicitationResult>;
+	handleElicitationRequest(context: ElicitationContext): Promise<ElicitationHandlerResult>;
 	/**
 	 * Takes over the launch-time Connector reconciliation, which settles after the launch returns. The promise does
 	 * not reject; it resolves to the session's Connector-owned servers, or `undefined` when they are unavailable.
@@ -510,6 +516,11 @@ export interface ICopilotCreateSessionLaunchPlan extends ICopilotSessionLaunchBa
 export interface ICopilotResumeSessionLaunchPlan extends ICopilotSessionLaunchBase {
 	readonly kind: 'resume';
 	readonly workingDirectory: URI;
+	/**
+	 * Whether the resumed session keeps the permission mode the runtime restored, because the host takes its
+	 * approvals from the runtime: an imported chat another client drove.
+	 */
+	readonly keepsRestoredPermissionMode?: boolean;
 	readonly fallback: {
 		readonly model: ModelSelection | undefined;
 		readonly longContextWindow?: number;
@@ -1454,7 +1465,7 @@ export class CopilotSessionLauncher implements ICopilotSessionLauncher {
 			AUTO_APPROVAL: true,
 			...catalogInstallationFeatureFlags,
 			CONNECTORS: copilotConnectorsEnabled,
-			MCP_SKILLS: this._configurationService.getRootValue(platformRootSchema, AgentHostMcpSkillsEnabledConfigKey) === true,
+			MCP_SKILLS: this._configurationService.getRootValue(platformRootSchema, AgentHostMcpSkillsEnabledConfigKey) !== false,
 			TGREP: plan.workspace?.kind !== 'virtual',
 			CONTENT_EXCLUSION: true,
 			// Attached long-lived services prevent the runtime from reaching session idle.
@@ -1585,6 +1596,7 @@ export class CopilotSessionLauncher implements ICopilotSessionLauncher {
 		const bridgedPermissions = this._managedSettingsService.permissions;
 		const resolved = await resolveCopilotSessionManagedSettings(plan, runtime.cancellationToken, runtime.reportManagedSettingsActivity);
 		runtime.setApprovalPolicy?.(resolved.resolved, bridgedPermissions);
+		const permissionMode = runtime.resolveInitialPermissionMode?.();
 		// The overrides read files without permission checks, so they follow the managed policy that withholds workspace retrieval.
 		const virtualSearchTools = plan.virtualSessionFs && !isManagedWorkspaceRetrievalWithheld(resolved.resolved) ? createCopilotVirtualSearchTools(plan.virtualSessionFs) : [];
 		const hostToolNames = new Set([...virtualSearchTools, ...shellTools, ...serverTools, ...extensionTools, ...computerUseTools].map(tool => tool.name));
@@ -1703,6 +1715,8 @@ export class CopilotSessionLauncher implements ICopilotSessionLauncher {
 			// HydraFusion, which Auto's service-provided tiers can route to, needs experimental mode.
 			enableExperimentalMode: true,
 			interactiveUser: true,
+			// Applied before the first turn, or before a resumed session continues pending work.
+			...(permissionMode ? { permissionMode } : {}),
 			featureFlags,
 			...toSdkExpAssignments(this._configurationService.getRootConfigValues?.()[CopilotCliVSCodeAssignmentContextKey]),
 			streaming: true,

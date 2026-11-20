@@ -17,7 +17,7 @@ import { onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/
 import { isWindows, isLinux, isWeb, isNative, isMacintosh, isIOS } from '../../base/common/platform.js';
 import { Parts, Position, PanelAlignment, IWorkbenchLayoutService, SINGLE_WINDOW_PARTS, MULTI_WINDOW_PARTS, IPartVisibilityChangeEvent, positionToString, LayoutSettings, ModernUIDensity } from '../../workbench/services/layout/browser/layoutService.js';
 import { ILayoutOffsetInfo } from '../../platform/layout/browser/layoutService.js';
-import { Part } from '../../workbench/browser/part.js';
+import { Part, relayoutWorkbenchParts, updateSashEndpoints } from '../../workbench/browser/part.js';
 import { Direction, ISerializableView, ISerializedGrid, ISerializedLeafNode, ISerializedNode, IViewSize, Orientation, SerializableGrid, Sizing } from '../../base/browser/ui/grid/grid.js';
 import { IEditorGroupsService } from '../../workbench/services/editor/common/editorGroupsService.js';
 import { ContentPart } from '../../workbench/browser/parts/editor/contentPart.js';
@@ -74,7 +74,7 @@ import { MenuActivityBarSize } from '../../workbench/browser/parts/activitybar/m
 import { CustomViewVisibleContext, EditorMaximizedContext } from '../common/agentsWindowContextKeys.js';
 import { SessionsLayoutPolicy, ViewportClass } from './layoutPolicy.js';
 import { ChatLayoutPresentation } from '../common/chatLayout.js';
-import { AGENTS_CARD_SURFACE_CLASS, AGENTS_PART_CARD_CLASS } from '../../workbench/browser/parts/sessions/agentsPartCard.js';
+import { AGENTS_CARD_SURFACE_CLASS, AGENTS_PART_CARD_CLASS, getSessionsPartFrameInset, getSidePaneFrameInset } from '../../workbench/browser/parts/sessions/agentsPartCard.js';
 import { MobileNavigationStack } from './mobileNavigationStack.js';
 import { MobileTitlebarPart } from './parts/mobile/mobileTitlebarPart.js';
 import { observeSessionActivityBarSize, registerSessionActivityBarExternalHost, SessionActivityBarColumn } from '../../workbench/browser/parts/sessions/sessionActivityBarHost.js';
@@ -89,6 +89,9 @@ import { AGENTS_FLOATING_PANEL_GAP } from '../../workbench/contrib/sessions/comm
 import { SESSION_ACTIVITY_BAR_FIXED_COLUMN_SETTING } from '../../workbench/contrib/sessions/common/sessionConfig.js';
 import { observableConfigValue } from '../../platform/observable/common/platformObservableUtils.js';
 import { logSettingExperimentTrigger } from '../../platform/telemetry/common/experimentTrigger.js';
+import { IThemeService } from '../../platform/theme/common/themeService.js';
+import { ISizeService } from '../../platform/theme/common/sizeService.js';
+import { agentsPanelsSpacing } from '../../platform/theme/common/sizeRegistry.js';
 import { ITelemetryService } from '../../platform/telemetry/common/telemetry.js';
 import { createMainWindowInstantiationService } from '../../workbench/services/sessions/browser/sessionHost.js';
 import { AgentWorkbenchLayout, ISessionsHostLayoutService, ISessionsHostSidePane } from '../../workbench/services/sessions/browser/sessionsHostLayoutService.js';
@@ -367,6 +370,7 @@ export abstract class Workbench extends Disposable implements IAgentWorkbenchLay
 	//#region Properties
 
 	readonly mainContainer = document.createElement('div');
+	private panelSpacing = AGENTS_FLOATING_PANEL_GAP;
 
 	get activeContainer(): HTMLElement {
 		return this.getContainerFromDocument(getActiveDocument());
@@ -384,7 +388,7 @@ export abstract class Workbench extends Disposable implements IAgentWorkbenchLay
 		if (targetDocument === this.mainContainer.ownerDocument) {
 			return this.mainContainer;
 		} else {
-			// eslint-disable-next-line no-restricted-syntax
+			// eslint-disable-next-line eslint-js/no-restricted-syntax
 			return targetDocument.body.getElementsByClassName('monaco-workbench')[0] as HTMLElement;
 		}
 	}
@@ -540,7 +544,7 @@ export abstract class Workbench extends Disposable implements IAgentWorkbenchLay
 		// The viewport `<meta>` tag is injected by the shared workbench.html,
 		// so we cannot use dom.ts `h()` to create it. Look it up by tag name
 		// and filter by the `name` attribute to avoid a selector query.
-		// eslint-disable-next-line no-restricted-syntax
+		// eslint-disable-next-line eslint-js/no-restricted-syntax
 		const metaElements = mainWindow.document.head.getElementsByTagName('meta');
 		let viewportMeta: HTMLMetaElement | undefined;
 		for (let i = 0; i < metaElements.length; i++) {
@@ -603,6 +607,21 @@ export abstract class Workbench extends Disposable implements IAgentWorkbenchLay
 				const lifecycleService = accessor.get(ILifecycleService);
 				const storageService = accessor.get(IStorageService);
 				const configurationService = accessor.get(IConfigurationService);
+				const sizeService = accessor.get(ISizeService);
+				const themeService = accessor.get(IThemeService);
+				const updatePanelSpacing = () => {
+					const spacing = sizeService.getSize(agentsPanelsSpacing, themeService.getColorTheme())!.value;
+					if (spacing !== this.panelSpacing) {
+						this.panelSpacing = spacing;
+						if (this.workbenchGrid) {
+							this.layout();
+							relayoutWorkbenchParts(this.workbenchGrid);
+							this._layoutSidePane();
+						}
+					}
+				};
+				updatePanelSpacing();
+				this._register(sizeService.onDidChangeSizes(updatePanelSpacing));
 				this.chatLayoutPresentation = this._register(new ChatLayoutPresentation(configurationService, this.agentWorkbenchLayout === AgentWorkbenchLayout.Desktop, this.layoutPolicy.isPhoneLayout));
 				const hostService = accessor.get(IHostService);
 				const hoverService = accessor.get(IHoverService);
@@ -1652,7 +1671,7 @@ export abstract class Workbench extends Disposable implements IAgentWorkbenchLay
 			this._register(autorun(reader => {
 				const value = size.read(reader);
 				this.sessionActivityBarSizeKey?.set(value);
-				column.setLayout(this._gridGutter(), this.isModernUICompact(), value);
+				column.setLayout(this._sessionActivityBarColumnGap(), this.isModernUICompact(), value);
 			}));
 			viewMap[SessionActivityBarColumn.ID] = column;
 			this._register(registerSessionActivityBarExternalHost(this.mainContainer, column));
@@ -1680,6 +1699,8 @@ export abstract class Workbench extends Disposable implements IAgentWorkbenchLay
 		// If the editor is restored visible, it already has an established
 		// width, so a later reveal must not force an even split over it.
 		this._hasAppliedInitialEditorSplit = this.partVisibility.editor;
+
+		this._registerEditorPaneVisibilityClass(editorPart);
 
 		// Listen for part visibility changes (for parts in grid)
 		for (const part of [titleBar, panelPart, sideBar, auxiliaryBarPart, sessionsPart, editorPart]) {
@@ -1738,6 +1759,14 @@ export abstract class Workbench extends Disposable implements IAgentWorkbenchLay
 					break;
 			}
 		}));
+	}
+
+	/**
+	 * Updates the side pane class as soon as the grid shows or hides the side pane's node, which is before the grid lays
+	 * out that node and the parts beside it, whose frame insets depend on the class.
+	 */
+	private _registerEditorPaneVisibilityClass(editorPart: { readonly onDidVisibilityChange: Event<boolean> }): void {
+		this._register(editorPart.onDidVisibilityChange(() => this._updateEditorPaneVisibilityClass()));
 	}
 
 	private _registerGridMaximizationListener(): void {
@@ -2131,12 +2160,17 @@ export abstract class Workbench extends Disposable implements IAgentWorkbenchLay
 		return this.layoutPolicy.viewportClass.get() === 'phone' || this.isModernUICompact() ? 0 : AGENTS_FLOATING_PANEL_GAP;
 	}
 
+	private _sessionActivityBarColumnGap(): number {
+		const frameInset = this.isEditorPaneVisible() ? getSidePaneFrameInset(this.mainContainer) : getSessionsPartFrameInset(this.mainContainer);
+		return Math.max(0, this._gridGutter() - frameInset);
+	}
+
 	protected _layoutGrid(): void {
 		const mobileTopBarHeight = this.mobileTopBarElement?.offsetHeight ?? 0;
 		// Keep the desktop grid margin stable when sidebar visibility changes.
 		const gridGutterW = this._gridGutter();
 		const gridGutterH = gridGutterW;
-		this.sessionActivityBarColumn?.setLayout(gridGutterW, this.isModernUICompact(), this.sessionActivityBarSize?.get() ?? MenuActivityBarSize.Compact);
+		this.sessionActivityBarColumn?.setLayout(this._sessionActivityBarColumnGap(), this.isModernUICompact(), this.sessionActivityBarSize?.get() ?? MenuActivityBarSize.Compact);
 		this.workbenchGrid.layout(
 			this._mainContainerDimension.width - gridGutterW,
 			this._mainContainerDimension.height - mobileTopBarHeight - gridGutterH
@@ -2201,6 +2235,9 @@ export abstract class Workbench extends Disposable implements IAgentWorkbenchLay
 	}
 
 	private handleContainerDidLayout(container: HTMLElement, dimension: IDimension): void {
+		if (container === this.mainContainer && this.workbenchGrid) {
+			updateSashEndpoints(this.workbenchGrid.element, !this.isModernUICompact() && this.layoutPolicy.viewportClass.get() !== 'phone');
+		}
 		this._onDidLayoutContainer.fire({ container, dimension });
 		if (container === this.mainContainer) {
 			this._onDidLayoutMainContainer.fire(dimension);
@@ -2226,6 +2263,10 @@ export abstract class Workbench extends Disposable implements IAgentWorkbenchLay
 
 	isModernUICompact(): boolean {
 		return this.layoutDensity === ModernUIDensity.Compact && this.layoutPolicy.viewportClass.get() !== 'phone';
+	}
+
+	getPanelSpacing(): number {
+		return this.isModernUICompact() || this.layoutPolicy.viewportClass.get() === 'phone' ? 0 : this.panelSpacing;
 	}
 
 	getLayoutClasses(): string[] {

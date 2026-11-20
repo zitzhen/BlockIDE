@@ -144,7 +144,8 @@ export interface ICustomizationMarketplaceManagementProvider {
 	 */
 	readonly onDidChangeMarketplaces: Event<void>;
 	list(sessionResource: URI): Promise<readonly ICustomizationMarketplaceInfo[]>;
-	add(sessionResource: URI, source: string): Promise<ICustomizationMarketplaceInfo>;
+	/** Omit the session for a global mutation through the local provider. */
+	add(sessionResource: URI | undefined, source: string): Promise<ICustomizationMarketplaceInfo>;
 	queryMarketplace(sessionResource: URI, marketplace: ICustomizationMarketplaceInfo, options: ICustomizationMarketplaceSourceQuery, token: CancellationToken): Promise<ICustomizationMarketplaceSourcePage>;
 	remove(sessionResource: URI, name: string, force?: boolean): Promise<ICustomizationMarketplaceRemoveResult>;
 	refresh(sessionResource: URI, name?: string): Promise<readonly ICustomizationMarketplaceRefreshResult[]>;
@@ -258,6 +259,15 @@ export interface IHarnessDescriptor {
 	readonly marketplaceManagementProvider?: ICustomizationMarketplaceManagementProvider;
 }
 
+/** Organization control over a single customization. */
+export interface ICustomizationOrganizationControl {
+	/**
+	 * Enabled state the organization requires. Undefined when the organization
+	 * supplies the customization without locking its enablement.
+	 */
+	readonly requiredEnabled?: boolean;
+}
+
 /**
  * Identifies who supplied a built-in or account customization.
  * `label` is optional for `harness`, which defaults to the active harness name.
@@ -293,6 +303,8 @@ export interface ICustomizationItem {
 	readonly enabled?: boolean;
 	/** Host-published reason for a disabled customization. */
 	readonly disabledReason?: CustomizationDisabledReason;
+	/** Set when the user's organization manages this customization. */
+	readonly organizationControl?: ICustomizationOrganizationControl;
 	/** When set, items with the same groupKey are displayed under a shared collapsible header. */
 	readonly groupKey?: string;
 	/**

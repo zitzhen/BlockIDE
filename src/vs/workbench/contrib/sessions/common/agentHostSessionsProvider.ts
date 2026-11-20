@@ -109,6 +109,7 @@ export type AgentHostMcpTool = {
 	readonly name: string;
 	readonly title?: string;
 	readonly description?: string;
+	readonly annotations?: { readonly title?: string };
 };
 
 /**

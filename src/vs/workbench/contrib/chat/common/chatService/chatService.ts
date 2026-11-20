@@ -686,16 +686,22 @@ export interface IChatAutoModeResolutionPart {
 	resolved?: { readonly id: string; readonly name: string; readonly reason?: string };
 	/** A router other than Auto, such as a host-side model router. */
 	router?: string;
+	/** The playbook a host-side model router chose, when it is written as playbooks. */
+	playbook?: string;
 	/** The chosen route's `when`, when it decided the pick. */
 	preference?: string;
 	/** The thinking effort the router chose for this turn. */
 	effort?: string;
+	/** The context window a host-side model router asked for, in tokens. */
+	contextSize?: number;
 	/** Display name of the model the router moved off on this turn. */
 	switchedFrom?: string;
 	/** The router had no confident pick and used its first route. */
 	defaulted?: boolean;
 	/** The chat stayed on the model it was already running. */
 	kept?: boolean;
+	/** Auto is presented as Copilot Fusion, so the row names it that way. */
+	fusion?: boolean;
 }
 
 /**
@@ -756,6 +762,18 @@ export interface IChatTerminalToolInvocationData {
 	intention?: string;
 	/** The working directory URI for the terminal */
 	cwd?: UriComponents;
+	/**
+	 * Where an Agent Host command runs, shown before approval because the same
+	 * relative command line runs a different program in another directory or
+	 * environment. The built-in terminal tool leaves this unset and names a
+	 * changed directory in its confirmation title instead.
+	 */
+	executionTarget?: {
+		/** The working directory, verbatim in its execution environment's path syntax. */
+		readonly workingDirectory?: string;
+		/** The execution environment, when it is not the agent host's own machine. */
+		readonly environment?: string;
+	};
 	/**
 	 * Pre-computed confirmation display data (localization must happen at source).
 	 * Contains the command line to show in confirmation (potentially without cd prefix)
@@ -2177,6 +2195,10 @@ export interface IChatRequestSubmittedEvent {
 export interface IChatRequestAcceptedEvent {
 	readonly chatSessionResource: URI;
 	readonly isNewSession: boolean;
+	/** The mode (agent) the submission was sent with, if the sender chose one. */
+	readonly modeInfo?: IChatRequestModeInfo;
+	/** Actor that produced an Agent Host message, e.g. an agent delegating to another session. Absent for direct sends. */
+	readonly agentHostMessageOrigin?: MessageOrigin;
 }
 
 export const IChatService = createDecorator<IChatService>('IChatService');

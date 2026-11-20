@@ -16,6 +16,7 @@ import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
 import { ISessionsManagementService } from '../../../../../workbench/contrib/sessions/common/sessionsManagement.js';
 import { IOpenSessionOptions, ISessionsService } from '../../../../../workbench/contrib/sessions/browser/sessionsService.js';
 import { ISession } from '../../../../../workbench/services/sessions/common/session.js';
+import { ISessionEditorWorkingSetService, SessionEditorWorkingSetService } from '../../../layout/common/sessionEditorWorkingSet.js';
 import { SessionsTitleBarWidget } from '../../browser/sessionsTitleBarWidget.js';
 import { ISessionHost, ISessionHostService, SessionHostKind } from '../../../../../workbench/services/sessions/browser/sessionHost.js';
 import { IChatWindow, IChatWindowService } from '../../../../../workbench/contrib/chatWindow/browser/chatWindow.js';
@@ -70,6 +71,7 @@ suite('SessionsTitleBarWidget', () => {
 			[IEditorGroupsService, upcastPartial<IEditorGroupsService>({})],
 			[IWorkbenchLayoutService, upcastPartial<IWorkbenchLayoutService>({})],
 			[ISessionHostService, upcastPartial<ISessionHostService>({ getHostOfWindow: () => upcastPartial<ISessionHost>({ session: constObservable(undefined), chat: constObservable(undefined) }) })],
+			[ISessionEditorWorkingSetService, new SessionEditorWorkingSetService()],
 		]);
 		const accessor: ServicesAccessor = { get: <T>(id: ServiceIdentifier<T>) => services.get(id) as T };
 		Reflect.set(widget, '_windowHost', upcastPartial<ISessionHost>({ kind: SessionHostKind.ChatWindow, parent: undefined, windowId: constObservable(7) }));
@@ -130,16 +132,30 @@ suite('SessionsTitleBarWidget', () => {
 		Reflect.set(widget, '_isQuickChat', false);
 		Reflect.set(widget, '_sessionTitle', undefined);
 		const hoverDelegate: IHoverDelegate = { placement: 'element', delay: 500, showHover: () => undefined };
-		const hovers: { content: string | undefined; sharedDelegate: boolean }[] = [];
+		const hovers: { target: HTMLElement; content: () => string | undefined; sharedDelegate: boolean }[] = [];
 		Reflect.set(widget, 'options', { hoverDelegate });
 		Reflect.set(widget, 'hoverService', upcastPartial<IHoverService>({
-			setupManagedHover: (delegate, _target, content) => {
-				hovers.push({ content: typeof content === 'string' ? content : undefined, sharedDelegate: delegate === hoverDelegate });
+			setupManagedHover: (delegate, target, content) => {
+				hovers.push({
+					target,
+					content: typeof content === 'function' ? content as () => string | undefined : () => typeof content === 'string' ? content : undefined,
+					sharedDelegate: delegate === hoverDelegate,
+				});
 				return { ...Disposable.None, show: () => { }, hide: () => { }, update: () => { } };
 			},
 		}));
 
 		renderActiveSession.call(widget);
+		const workspaceHover = hovers.find(hover => hover.target.classList.contains('agent-sessions-titlebar-workspace'))!;
+		const branchHover = hovers.find(hover => hover.target.classList.contains('agent-sessions-titlebar-branch'))!;
+		Object.defineProperties(workspaceHover.target, {
+			clientWidth: { configurable: true, value: 100 },
+			scrollWidth: { configurable: true, value: 100 },
+		});
+		Object.defineProperties(branchHover.target, {
+			clientWidth: { configurable: true, value: 80 },
+			scrollWidth: { configurable: true, value: 160 },
+		});
 
 		assert.deepStrictEqual({
 			ariaLabel: container.getAttribute('aria-label'),
@@ -148,7 +164,7 @@ suite('SessionsTitleBarWidget', () => {
 			workspaceIcon: !!container.querySelector('.codicon-worktree-compact'),
 			branchIcon: !!container.querySelector('.codicon-git-branch-compact'),
 			branch: container.querySelector('.agent-sessions-titlebar-branch')?.textContent,
-			hovers,
+			hovers: hovers.map(hover => ({ content: hover.content(), sharedDelegate: hover.sharedDelegate })),
 			nativeTitles: container.querySelectorAll('[title]').length,
 		}, {
 			ariaLabel: 'Show Sessions: vscode, branch feature/session-branch',
@@ -158,7 +174,7 @@ suite('SessionsTitleBarWidget', () => {
 			branchIcon: true,
 			branch: 'feature/session-branch',
 			hovers: [
-				{ content: 'vscode', sharedDelegate: true },
+				{ content: undefined, sharedDelegate: true },
 				{ content: 'feature/session-branch', sharedDelegate: true },
 			],
 			nativeTitles: 0,

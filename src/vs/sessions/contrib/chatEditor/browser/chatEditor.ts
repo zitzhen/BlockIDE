@@ -34,6 +34,7 @@ import { ISessionsListModelService } from '../../../../workbench/contrib/session
 import { getChatCompletedStateIcon, ISessionAgentMergeConfiguration } from '../../../../workbench/contrib/sessions/browser/sessionAgentMerge.js';
 import { getSessionChatAncestors } from '../../../../workbench/contrib/sessions/browser/parts/sessionHeaderBar.js';
 import { getSessionConversationStatusAriaLabel } from '../../../../workbench/contrib/sessions/browser/sessionConversationGroups.js';
+import { ChatWindowSessionDropTarget } from '../../chatWindow/browser/chatWindowSessionDropTarget.js';
 import { ISessionPaneContent } from '../../../../workbench/services/sessions/common/sessionPane.js';
 
 /** The view type of the chat of a session, shown as an editor: the chat part of a chat window shows it. */
@@ -251,8 +252,8 @@ export class ChatEditorView extends Disposable implements IViewEditorView {
 	/** Whether the view shows its title, the session header: not while its group shows its tabs, which show its actions. */
 	private readonly _providedTitleVisible = observableValue(this, true);
 
-	/** The title of the session header drags the chat. */
-	get dragHandle(): HTMLElement { return this.sessionView.headerTitleElement; }
+	/** The session header drags the chat. */
+	get dragHandle(): HTMLElement { return this.sessionView.headerElement; }
 
 	/** The actions of the session header, which the tab bar of its group shows while the header hides. */
 	get titleMenu(): IEditorPaneTitleMenu { return this.sessionView.titleMenu; }
@@ -286,6 +287,7 @@ export class ChatEditorView extends Disposable implements IViewEditorView {
 		this.element = $('.session-chat-view-editor.sessions-window-host');
 		// The chat takes what is dropped on it, such as files to attach; editors dropped on the edges of its part split it.
 		this._register(registerContentDropTarget(this.element));
+		this._register(instantiationService.createInstance(ChatWindowSessionDropTarget, this.element, () => host?.content.get()?.chat.get().resource));
 		// The active editor, for what the chat shows, such as the checked entries of its Session Activity Bar, is the one of
 		// its window's main part, as the main window's chat reads the one of its editor area.
 		const scopedContextKeyService = this._scopedServices.add(contextKeyService.createScoped(this.element));

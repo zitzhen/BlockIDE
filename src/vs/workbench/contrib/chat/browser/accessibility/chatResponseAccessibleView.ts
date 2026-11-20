@@ -13,10 +13,11 @@ import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
 import { AccessibleContentProvider, AccessibleViewProviderId, AccessibleViewType, IAccessibleViewContentProvider } from '../../../../../platform/accessibility/browser/accessibleView.js';
 import { IAccessibleViewImplementation } from '../../../../../platform/accessibility/browser/accessibleViewRegistry.js';
+import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from '../../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService, StorageScope } from '../../../../../platform/storage/common/storage.js';
 import { AccessibilityVerbositySettingId } from '../../../accessibility/browser/accessibilityConfiguration.js';
-import { migrateLegacyTerminalToolSpecificData } from '../../common/chat.js';
+import { getTerminalExecutionTargetDescription, migrateLegacyTerminalToolSpecificData } from '../../common/chat.js';
 import { autoModeRoutingTitle } from '../../common/chatAutoModeExplainability.js';
 import { formatChatToolError } from '../../common/chatProgressFormatting.js';
 import { ChatContextKeys } from '../../common/actions/chatContextKeys.js';
@@ -26,12 +27,13 @@ import { getChatRequestAccessibleText } from '../chatRequestText.js';
 import { IToolResultInputOutputDetails, IToolResultOutputDetails, isToolResultInputOutputDetails, isToolResultOutputDetails, toolContentToA11yString } from '../../common/tools/languageModelToolsService.js';
 import { ChatTreeItem, IChatWidget, IChatWidgetService } from '../chat.js';
 import { isLocation, Location } from '../../../../../editor/common/languages.js';
+import { EditorContextKeys } from '../../../../../editor/common/editorContextKeys.js';
 
 export class ChatResponseAccessibleView implements IAccessibleViewImplementation {
 	readonly priority = 100;
 	readonly name = 'panelChat';
 	readonly type = AccessibleViewType.View;
-	readonly when = ChatContextKeys.inChatSession;
+	readonly when = ContextKeyExpr.and(ChatContextKeys.inChatSession, EditorContextKeys.hoverFocused.negate());
 	getProvider(accessor: ServicesAccessor) {
 		const widgetService = accessor.get(IChatWidgetService);
 		const storageService = accessor.get(IStorageService);
@@ -97,7 +99,9 @@ export function getToolSpecificDataDescription(toolSpecificData: ToolSpecificDat
 
 	if (isLegacyChatTerminalToolInvocationData(toolSpecificData) || toolSpecificData.kind === 'terminal') {
 		const terminalData = migrateLegacyTerminalToolSpecificData(toolSpecificData);
-		return terminalData.commandLine.userEdited ?? terminalData.commandLine.toolEdited ?? terminalData.commandLine.original;
+		const commandLine = terminalData.commandLine.userEdited ?? terminalData.commandLine.toolEdited ?? terminalData.commandLine.original;
+		const executionTarget = getTerminalExecutionTargetDescription(terminalData);
+		return executionTarget ? localize('terminalCommandWithExecutionTarget', "{0} ({1})", commandLine, executionTarget) : commandLine;
 	}
 
 	switch (toolSpecificData.kind) {

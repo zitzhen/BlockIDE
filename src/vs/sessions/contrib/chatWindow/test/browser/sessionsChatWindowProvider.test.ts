@@ -21,7 +21,7 @@ import { IContextKeyService } from '../../../../../platform/contextkey/common/co
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
 import { IChatService } from '../../../../../workbench/contrib/chat/common/chatService/chatService.js';
-import { IChatWindow, IChatWindowChat, IChatWindowOpenOptions, IChatWindowProvider, IChatWindowService } from '../../../../../workbench/contrib/chatWindow/browser/chatWindow.js';
+import { getChatWindowMainPartOptions, IChatWindow, IChatWindowChat, IChatWindowOpenOptions, IChatWindowProvider, IChatWindowService } from '../../../../../workbench/contrib/chatWindow/browser/chatWindow.js';
 import { ChatWindowsRestoration, OPEN_CHAT_WINDOWS_STORAGE_KEY } from '../../../../../workbench/contrib/chatWindow/browser/chatWindowsRestoration.js';
 import { ChatWindowLayoutMode } from '../../../../../workbench/contrib/chatWindow/common/chatWindowLayout.js';
 import { ChatWindow, ChatWindowService } from '../../../../../workbench/contrib/chatWindow/browser/chatWindowService.js';
@@ -65,7 +65,7 @@ import { MenuActivityBar, MenuActivityBarSize } from '../../../../../workbench/b
 import { IStorageService, StorageScope, StorageTarget, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
 import { TestStorageService } from '../../../../../workbench/test/common/workbenchTestServices.js';
 import { AGENTS_FLOATING_PANEL_GAP } from '../../../../../workbench/contrib/sessions/common/layoutConstants.js';
-import { AGENTS_CHAT_WINDOW_CLASS, CHAT_WINDOW_MAIN_PART_GROUP_VIEW_OPTIONS, focusChatWindowUnlessFocused, getChatWindowMainPartOptions, SessionsChatWindowProvider } from '../../browser/sessionsChatWindowProvider.js';
+import { AGENTS_CHAT_WINDOW_CLASS, CHAT_WINDOW_MAIN_PART_GROUP_VIEW_OPTIONS, focusChatWindowUnlessFocused, SessionsChatWindowProvider } from '../../browser/sessionsChatWindowProvider.js';
 import { DesktopMainEditorPart } from '../../../../browser/parts/desktopEditorPart.js';
 import { IEditorGroupViewOptions } from '../../../../../workbench/browser/parts/editor/editor.js';
 import { EditorInputCapabilities, GroupIdentifier, GroupModelChangeKind } from '../../../../../workbench/common/editor.js';
@@ -123,6 +123,8 @@ suite('Sessions chat window provider', () => {
 		// The main window shows another session than those that move into it, such as one whose opening was cancelled
 		const mainWindowActiveSession = constObservable<ITestSessionWithChat | undefined>(undefined);
 		const onDidChangeSessions = store.add(new Emitter<ISessionsChangeEvent>());
+		/** How many times the chats looked their session up. */
+		const lookups = { count: 0 };
 		const visibleSessions = observableValue<readonly (ITestSessionWithChat | undefined)[]>('visibleSessions', []);
 		const configuration = new TestConfigurationService({ [CHAT_WINDOWS_ENABLED_SETTING]: true });
 		const sentiment = observableValue<IChatSentiment>('sentiment', {});
@@ -174,6 +176,7 @@ suite('Sessions chat window provider', () => {
 			override getSession(resource: URI) { return sessions.find(session => session.resource.toString() === resource.toString()); }
 			override getSessions() { return sessions; }
 			override getSessionForChatResource(resource: URI) {
+				lookups.count++;
 				for (const session of sessions) {
 					const chat = session.chats.get().find(candidate => candidate.resource.toString() === resource.toString());
 					if (chat) {
@@ -285,7 +288,7 @@ suite('Sessions chat window provider', () => {
 		}));
 		beforeProvider?.(storage);
 		const provider = store.add(instantiationService.createInstance(SessionsChatWindowProvider));
-		return { provider, chatWindowService, editorParts, storage, events, window, titleBars, opening, slots, onDidAcceptNewSessionRequest, onDidEndNewSessionRequest, windowInstantiationService: store.add(instantiationService.createChild(new ServiceCollection([IContextKeyService, store.add(new ContextKeyService(configuration))]))), onDidChangeSessions, sentiment, configuration, editorGroups, activeChat, chatHostOpenerService, visibleSessions };
+		return { provider, lookups, chatWindowService, editorParts, storage, events, window, titleBars, opening, slots, onDidAcceptNewSessionRequest, onDidEndNewSessionRequest, windowInstantiationService: store.add(instantiationService.createChild(new ServiceCollection([IContextKeyService, store.add(new ContextKeyService(configuration))]))), onDidChangeSessions, sentiment, configuration, editorGroups, activeChat, chatHostOpenerService, visibleSessions };
 	}
 
 	/** The window the chats show in: its active chat is `activeChat`. */
@@ -340,16 +343,33 @@ suite('Sessions chat window provider', () => {
 		});
 	});
 
+	test('a chat stays in the main window\'s grid until its window binds it, so that the editors of its session are there to move into the window; its window then keeps it out', async () => {
+		const store = disposables.add(new DisposableStore());
+		const session = createSession('session', [createChat('main')]);
+		const { provider, events, windowInstantiationService } = createProvider(store, [session]);
+
+		const content = (await provider.resolveContent(session.resource))!;
+		await content.resolveChat(session.resource);
+		const beforeBind = [...events];
+		const binding = store.add(content.bind!(window, windowInstantiationService));
+		const afterBind = [...events];
+		binding.dispose();
+		const afterUnbind = [...events];
+		content.dispose();
+
+		assert.deepStrictEqual({ beforeBind, afterBind, afterUnbind }, { beforeBind: [], afterBind: ['hide session /main'], afterUnbind: ['hide session /main'] });
+	});
+
 	test('another resource of a chat a window shows, such as its session\'s, resolves to the entry the window has of it, not to one of its own', async () => {
 		const store = disposables.add(new DisposableStore());
 		const session = createSession('session', [createChat('main')]);
-		const { provider, events } = createProvider(store, [session]);
+		const { provider } = createProvider(store, [session]);
 		const content = store.add((await provider.resolveContent(session.resource))!);
 		const shown = (await content.resolveChat(URI.parse('test:/main')))!;
 
 		const ofSession = await content.resolveChat(session.resource);
 
-		assert.deepStrictEqual({ same: ofSession === shown, events }, { same: true, events: ['hide session /main'] });
+		assert.deepStrictEqual({ same: ofSession === shown }, { same: true });
 	});
 
 	test('a session resolves to the chat its grid slot shows, unless the exact chat is asked for, which is its main chat', async () => {
@@ -384,6 +404,64 @@ suite('Sessions chat window provider', () => {
 		onDidChangeSessions.fire({ added: [], changed: [session], removed: [] });
 
 		assert.deepStrictEqual(ended, ['/archived', '/deleted']);
+	});
+
+	test('a chat leaves its window once its session is removed, such as deleted, also while the session\'s last state still lists it; not as its provider goes away, which removes nothing', async () => {
+		const store = disposables.add(new DisposableStore());
+		const session = createSession('session', [createChat('main')]);
+		const sessions = [session];
+		const { provider, onDidChangeSessions } = createProvider(store, sessions);
+		const content = store.add((await provider.resolveContent(session.resource))!);
+		const chat = (await content.resolveChat(URI.parse('test:/main')))!;
+		const ended: string[] = [];
+		store.add(chat.onDidEnd(() => ended.push('ended')));
+
+		// Its provider goes away, which hides its sessions, and comes back
+		sessions.length = 0;
+		onDidChangeSessions.fire({ added: [], changed: [], removed: [] });
+		sessions.push(session);
+		onDidChangeSessions.fire({ added: [session], changed: [], removed: [] });
+		const afterProviderReturned = [...ended];
+		// It is deleted, while its last state still lists the chat
+		sessions.length = 0;
+		onDidChangeSessions.fire({ added: [], changed: [], removed: [session] });
+
+		assert.deepStrictEqual({ afterProviderReturned, afterRemoved: ended }, { afterProviderReturned: [], afterRemoved: ['ended'] });
+	});
+
+	test('a chat that knows its session looks it up again only as sessions are added or removed, not as sessions change, such as while they stream', async () => {
+		const store = disposables.add(new DisposableStore());
+		const session = createSession('session', [createChat('main')]);
+		const other = createSession('other', [createChat('other-main')]);
+		const sessions = [session, other];
+		const { provider, onDidChangeSessions, lookups } = createProvider(store, sessions);
+		const content = store.add((await provider.resolveContent(session.resource))!);
+		await content.resolveChat(URI.parse('test:/main'));
+		const before = lookups.count;
+
+		for (let index = 0; index < 5; index++) {
+			onDidChangeSessions.fire({ added: [], changed: [other, session], removed: [] });
+		}
+		const afterChanges = lookups.count - before;
+		onDidChangeSessions.fire({ added: [createSession('added', [createChat('added-main')])], changed: [], removed: [] });
+
+		assert.deepStrictEqual({ afterChanges, afterAdded: lookups.count - before }, { afterChanges: 0, afterAdded: 1 });
+	});
+
+	test('a chat follows its session as it is replaced by another object with the same ID, such as a pending session that is committed, which comes only as a change', async () => {
+		const store = disposables.add(new DisposableStore());
+		const pending = createSession('session', [createChat('main')]);
+		const sessions = [pending];
+		const { provider, onDidChangeSessions } = createProvider(store, sessions);
+		const content = store.add((await provider.resolveContent(pending.resource))!);
+		const chat = asWindowChat((await content.resolveChat(URI.parse('test:/main')))!);
+		const before = chat.session.get() === pending;
+
+		const committed = createSession('session', [createChat('main')]);
+		sessions[0] = committed;
+		onDidChangeSessions.fire({ added: [], changed: [committed], removed: [] });
+
+		assert.deepStrictEqual({ before, after: chat.session.get() === committed }, { before: true, after: true });
 	});
 
 	test('a chat is read once it shows: while it is the active chat of its window, also of a window without focus, and its editor shows it; a chat marked unread stays unread until its next turn ends, which marks it read while it shows', async () => {
@@ -560,9 +638,10 @@ suite('Sessions chat window provider', () => {
 		const from = Object.assign(createSession('from', fromChats.get()), { chats: fromChats, dispose: () => disposed.push('from') });
 		const to = Object.assign(createSession('to', toChats.get()), { chats: toChats, dispose: () => disposed.push('to') });
 		const sessions = [from, to];
-		const { provider, events, onDidChangeSessions } = createProvider(store, sessions);
+		const { provider, events, onDidChangeSessions, windowInstantiationService } = createProvider(store, sessions);
 		const content = (await provider.resolveContent(URI.parse('test:/moved')))!;
 		const chat = asWindowChat((await content.resolveChat(URI.parse('test:/moved')))!);
+		store.add(content.bind!(window, windowInstantiationService));
 		const before = chat.session.get() === from;
 
 		transaction(tx => {
@@ -710,7 +789,7 @@ suite('Sessions chat window provider', () => {
 		const sizes: Record<string, { chatWindow: number; mainWindow: number }> = {};
 		for (const size of [getSessionActivityBarSize(storage), MenuActivityBarSize.Normal, MenuActivityBarSize.Compact]) {
 			setSessionActivityBarSize(storage, size);
-			mainColumn.setLayout(AGENTS_FLOATING_PANEL_GAP, false, size);
+			mainColumn.setLayout(AGENTS_FLOATING_PANEL_GAP - 1, false, size);
 			sizes[`${Object.keys(sizes).length ? 'then ' : 'initially '}${size}`] = { chatWindow: strip.size.get(), mainWindow: mainColumn.minimumWidth };
 		}
 
@@ -729,7 +808,7 @@ suite('Sessions chat window provider', () => {
 		}
 	});
 
-	test('the strip of a chat window fills its column and keeps the main window\'s distances, to the card beside it and to the right edge of the window, inside the card of its column, which clips what it shows, in Default and Compact density, whatever the main window\'s state', () => {
+	test('the strip of a chat window aligns with the card frames and keeps the main window\'s distances, to the card beside it and to the right edge of the window, inside the card of its column, which clips what it shows, in Default and Compact density, whatever the main window\'s state', () => {
 		const store = disposables.add(new DisposableStore());
 		const { provider, storage, windowInstantiationService, configuration } = createProvider(store, []);
 		const part = (name: string) => new class extends mock<IContentPart>() {
@@ -771,7 +850,6 @@ suite('Sessions chat window provider', () => {
 		const dock = (host: HTMLElement, size: MenuActivityBarSize) => {
 			const docked = append(host, $('.menu-activity-bar.session-activity-bar.docked'));
 			docked.classList.toggle('size-compact', size === MenuActivityBarSize.Compact);
-			docked.style.top = '0px';
 			return docked;
 		};
 		// Between the boxes, and as they show: a card that leaves its frame to what it holds shows it inside its border
@@ -782,7 +860,7 @@ suite('Sessions chat window provider', () => {
 			const columnCard = column.closest('.part-grid-card') ?? column;
 			return {
 				width: stripRect.width,
-				fillsColumn: stripRect.top === rect(column).top && stripRect.bottom === rect(column).bottom,
+				verticalInsets: [stripRect.top - rect(column).top, rect(column).bottom - stripRect.bottom],
 				insideItsCard: stripRect.left >= rect(columnCard).left && stripRect.right <= rect(columnCard).right,
 				toCard: stripRect.left - rect(card).right,
 				visibleToCard: stripRect.left - rect(card).right + frameInset,
@@ -802,14 +880,16 @@ suite('Sessions chat window provider', () => {
 			const main = createWorkbench(mainStore, compact, ['noeditorpane']);
 			const gridGutter = compact ? 0 : AGENTS_FLOATING_PANEL_GAP;
 			const mainColumn = mainStore.add(new SessionActivityBarColumn(constObservable(true)));
-			mainColumn.setLayout(gridGutter, compact, size);
+			mainColumn.setLayout(compact ? 0 : gridGutter - 1, compact, size);
 			const columnLeft = windowWidth - gridGutter - mainColumn.minimumWidth;
 			const chatCard = append(main, $('div'));
 			chatCard.style.cssText = `position: fixed; top: 0; left: 0; width: ${columnLeft}px; height: ${windowHeight}px;`;
 			append(main, mainColumn.element).style.cssText = `position: fixed; top: 0; left: ${columnLeft}px; width: ${mainColumn.minimumWidth}px; height: ${windowHeight}px;`;
 			// Its chat shows its frame inset within its card (`--agents-session-frame-inset`)
 			const sessionFrameInset = parseFloat(mainWindow.getComputedStyle(main).getPropertyValue('--agents-session-frame-inset')) || 0;
-			expected[density] = distances(dock(mainColumn.element, size), mainColumn.element, chatCard, sessionFrameInset);
+			const mainDistances = distances(dock(mainColumn.element, size), mainColumn.element, chatCard, sessionFrameInset);
+			expected[density] = mainDistances;
+			assert.strictEqual(mainDistances.visibleToCard, mainDistances.toEdge);
 			mainStore.dispose();
 
 			// A chat window beside the chat, and beside its main part, whatever the state of the main window, whose classes it mirrors

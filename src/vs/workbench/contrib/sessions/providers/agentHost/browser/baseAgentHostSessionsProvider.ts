@@ -977,6 +977,8 @@ function toSessionRemoteConnectionStatus(owner: object, connectionStatus: IObser
 			case 'disconnected':
 				switch (status.reason) {
 					case AgentHostTransportFailureReason.Unknown:
+					case AgentHostTransportFailureReason.AuthenticationFailed:
+					case AgentHostTransportFailureReason.SSHAuthenticationFailed:
 						return { kind: status.kind, reason: SessionRemoteConnectionFailureReason.Unknown };
 					case AgentHostTransportFailureReason.HostNotRunning:
 						return { kind: status.kind, reason: SessionRemoteConnectionFailureReason.HostNotRunning };
@@ -1494,14 +1496,17 @@ export class AgentHostSessionAdapter extends Disposable implements ISession {
 	 * The chats that recorded each pull request, by link key. A tool chat is
 	 * not listed, so its pull requests belong to the chat that started it. An
 	 * owner that is not a listed chat is kept, so no listed chat claims its
-	 * pull request; a record without an owner belongs to the main chat.
+	 * pull request; a record without an owner belongs to the main chat. When a
+	 * pull request is an artifact of some chat, only those chats own it; the
+	 * others merely reference it.
 	 */
 	private readonly _pullRequestOwners = derivedOpts<ReadonlyMap<string, readonly string[]>>({
 		owner: this,
 		equalsFn: (a, b) => a.size === b.size && [...a].every(([key, owners]) => arrayEquals(owners, b.get(key) ?? [])),
 	}, reader => {
 		const chats = this._chatsObs.read(reader);
-		const result = new Map<string, string[]>();
+		const referenceOwners = new Map<string, string[]>();
+		const artifactOwners = new Map<string, string[]>();
 		for (const artifact of this.artifacts.read(reader)) {
 			if (artifact.kind !== SessionArtifactKind.PullRequest || !artifact.link) {
 				continue;
@@ -1515,13 +1520,18 @@ export class AgentHostSessionAdapter extends Disposable implements ISession {
 				owner = chat.origin.parentChat;
 			}
 			const key = linkKey(artifact.link.toString());
-			const owners = result.get(key) ?? [];
-			if (!owners.includes(owner.toString())) {
-				owners.push(owner.toString());
+			for (const target of artifact.isArtifact ? [referenceOwners, artifactOwners] : [referenceOwners]) {
+				const owners = target.get(key) ?? [];
+				if (!owners.includes(owner.toString())) {
+					owners.push(owner.toString());
+				}
+				target.set(key, owners);
 			}
-			result.set(key, owners);
 		}
-		return result;
+		for (const [key, owners] of artifactOwners) {
+			referenceOwners.set(key, owners);
+		}
+		return referenceOwners;
 	});
 	/** Whether this session was created with worktree isolation. */
 	private readonly _worktreeIsolation = observableValue<boolean>('worktreeIsolation', false);
@@ -4612,6 +4622,8 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 	 * `customizations` and `activeClient.customizations` for the picker.
 	 */
 	protected readonly _lastSessionStates = new Map<string, SessionState>();
+	/** The chat that recorded each artifact, parsed once per session `_meta` value rather than once per artifact. */
+	private readonly _recordedArtifactOrigins = new WeakMap<SessionMeta, ReadonlyMap<string, string | undefined>>();
 	/** Fires when {@link _lastSessionStates} or {@link _sessionCache} changes, for readers of a backend session's default chat. */
 	private readonly _backendSessionsChanged = observableSignal(this);
 
@@ -7811,7 +7823,23 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 	// -- Session actions ------------------------------------------------------
 
 	async archiveSession(sessionId: string): Promise<void> {
-		this._setSessionArchived(sessionId, true);
+		this._assertSessionAvailable(sessionId);
+		const rawId = this._sessionKeyFromChatId(sessionId);
+		const cached = rawId ? this._sessionCache.get(rawId) : undefined;
+		const connection = this.connection;
+		if (!cached || !connection) {
+			throw new Error(localize('sessionArchiveUnavailable', "Connect to this session's host to mark it as done."));
+		}
+		const subscription = connection.getSubscription(StateComponents.Session, cached.backendUri, 'archiveSession');
+		try {
+			const result = await connection.dispatchConfirmed(cached.backendUri.toString(), subscription.object, { type: ActionType.SessionIsArchivedChanged, isArchived: true }, CancellationToken.None);
+			if (result.rejectionReason) {
+				throw new Error(result.rejectionReason);
+			}
+			this._setSessionArchivedLocally(sessionId, true);
+		} finally {
+			subscription.dispose();
+		}
 	}
 
 	async importSession(sessionId: string): Promise<void> {
@@ -8030,6 +8058,17 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 
 	get supportsForceWorktreeCleanup(): boolean {
 		return supportsForceWorktreeCleanup(this.connection?.initializeResult.get());
+	}
+
+	async prepareSessionWorktreeCleanup(sessionId: string): Promise<void> {
+		this._assertSessionAvailable(sessionId);
+		const rawId = this._sessionKeyFromChatId(sessionId);
+		const session = rawId ? this._sessionCache.get(rawId) : undefined;
+		const connection = this.connection;
+		if (!session || !connection?.prepareSessionWorktreeCleanup) {
+			throw new Error(localize('worktreeCleanupPreparationUnavailable', "Connect to an updated session host to prepare worktree cleanup."));
+		}
+		await connection.prepareSessionWorktreeCleanup(session.backendUri);
 	}
 
 	async sessionWorktreeCleanup(sessionId: string, retry: boolean, force?: boolean) {
@@ -8389,6 +8428,25 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 		return this._artifactIntegrations.value;
 	}
 
+	/** Every artifact's workspace reads its origin, so a session update parses the recorded artifacts once for all of them. */
+	private _getRecordedArtifactOrigin(meta: SessionMeta | undefined, artifactId: string): string | undefined {
+		if (!meta) {
+			return undefined;
+		}
+		let origins = this._recordedArtifactOrigins.get(meta);
+		if (!origins) {
+			const parsed = new Map<string, string | undefined>();
+			for (const artifact of readSessionArtifacts(meta)) {
+				if (!parsed.has(artifact.id)) {
+					parsed.set(artifact.id, artifact.origin?.chat);
+				}
+			}
+			origins = parsed;
+			this._recordedArtifactOrigins.set(meta, origins);
+		}
+		return origins.get(artifactId);
+	}
+
 	async acquireArtifactIntegration(sessionId: string, artifactId: string): Promise<IReference<IArtifactModel>> {
 		const rawId = this._sessionKeyFromChatId(sessionId);
 		const session = rawId ? this._sessionCache.get(rawId) : undefined;
@@ -8403,8 +8461,7 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 				return undefined;
 			}
 			const state = this._lastSessionStates.get(session.sessionId);
-			const recorded = readSessionArtifacts(state?._meta).find(artifact => artifact.id === artifactId);
-			const origin = recorded?.origin?.chat ?? state?.defaultChat;
+			const origin = this._getRecordedArtifactOrigin(state?._meta, artifactId) ?? state?.defaultChat;
 			const chat = state && session.chats.read(reader).find(chat => getSessionChatResource(state, chat.resource.fragment || DEFAULT_CHAT_ID, state.defaultChat) === origin);
 			const folder = chat?.workspace.read(reader)?.folders[0];
 			// eslint-disable-next-line local/code-agent-host-uri-mapping -- TODO(agent-host-uri): artifact integration workspace context needs the owning connection mapper
@@ -8867,11 +8924,18 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 
 	async sendRequest(chatId: string, chatResource: URI, options: ISendRequestOptions): Promise<ISession> {
 		this._assertSessionAvailable(chatId);
+		this._assertSendConnectionAvailable(options);
 		const newSession = this._getNewSession(chatId);
 		if (newSession) {
 			return this._sendNewSessionRequest(newSession, chatId, chatResource, options);
 		}
 		return this._sendCommittedChatRequest(chatId, chatResource, options);
+	}
+
+	private _assertSendConnectionAvailable(options: ISendRequestOptions): void {
+		if (options.requireConnected && (!this.connection || this.connection.connectionAvailable?.get() === false)) {
+			throw new Error(localize('agentHost.sendUnavailable', "The agent host is unavailable. Reconnect and try again."));
+		}
 	}
 
 	/** Send the first request for an already-committed peer chat, then clear its `new` flag. */
@@ -8934,6 +8998,7 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 		}
 
 		try {
+			this._assertSendConnectionAvailable(options);
 			this._applyChatSessionState(modelRef, selectedModelId, selectedAgentUri, { modelConfiguration: selectedModelConfiguration });
 
 			const result = await this._chatService.sendRequest(chatResource, query, sendOptions);

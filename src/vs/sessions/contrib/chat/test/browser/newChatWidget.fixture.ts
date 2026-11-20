@@ -832,6 +832,7 @@ async function renderNewChatWidget(context: ComponentFixtureContext, options: IN
 
 	const menuService = instantiationService.get(IMenuService) as FixtureMenuService;
 	instantiationService.stub(IChatPhoneInputPresenter, { enabled: constObservable(phoneLayout) });
+	instantiationService.stub(IViewsService, { getViewWithId: () => null });
 	if (connectorRecommendations) {
 		menuService.addItem(MenuId.ChatTipToolbar, {
 			command: { id: 'workbench.action.chat.previousTip', title: 'Previous tip', icon: Codicon.chevronLeft },
@@ -871,7 +872,6 @@ async function renderNewChatWidget(context: ComponentFixtureContext, options: IN
 		instantiationService.stub(IAgentWorkbenchLayoutService, { mainContainer: container });
 		instantiationService.stub(ISessionsHostLayoutService, {});
 		instantiationService.stub(ISessionChangesService, {});
-		instantiationService.stub(IViewsService, {});
 		instantiationService.set(ILayoutService, new class extends mock<ILayoutService>() {
 			override readonly mainContainer = container;
 			override readonly activeContainer = container;
@@ -914,6 +914,7 @@ async function renderNewChatWidget(context: ComponentFixtureContext, options: IN
 		session: activeSessionObservable,
 	}));
 	sessionViewContent.appendChild(view.element);
+	view.setVisible(true);
 	view.layout(width, height, 0, 0);
 	const targetWindow = dom.getWindow(container);
 	const nextFrame = () => new Promise<void>(resolve => targetWindow.requestAnimationFrame(() => resolve()));
